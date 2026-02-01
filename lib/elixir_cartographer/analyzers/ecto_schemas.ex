@@ -3,6 +3,8 @@ defmodule ElixirCartographer.Analyzers.EctoSchemas do
   Extracts Ecto schemas: fields, types, associations, and relationships.
   """
 
+  import ElixirCartographer.AstUtils, only: [parts_to_string: 1]
+
   @doc """
   Analyze parsed files for Ecto schemas.
   """
@@ -26,7 +28,7 @@ defmodule ElixirCartographer.Analyzers.EctoSchemas do
   defp extract_schemas(ast, path) do
     {_, schemas} = Macro.prewalk(ast, [], fn
       {:defmodule, _meta, [{:__aliases__, _, parts} | rest]} = node, acc ->
-        module_name = Enum.map_join(parts, ".", &to_string/1)
+        module_name = parts_to_string(parts)
 
         case extract_schema_info(rest) do
           nil -> {node, acc}
@@ -171,14 +173,14 @@ defmodule ElixirCartographer.Analyzers.EctoSchemas do
     Enum.reverse(validations)
   end
 
-  defp format_type({:__aliases__, _, parts}), do: Enum.map_join(parts, ".", &to_string/1)
+  defp format_type({:__aliases__, _, parts}), do: parts_to_string(parts)
   defp format_type(atom) when is_atom(atom), do: inspect(atom)
   defp format_type({:parameterized, _, _}), do: ":parameterized"
   defp format_type({:array, _, [inner]}), do: "{:array, #{format_type(inner)}}"
   defp format_type({:map, _, _}), do: ":map"
   defp format_type(other), do: inspect(other)
 
-  defp format_target({:__aliases__, _, parts}), do: Enum.map_join(parts, ".", &to_string/1)
+  defp format_target({:__aliases__, _, parts}), do: parts_to_string(parts)
   defp format_target(atom) when is_atom(atom), do: to_string(atom)
   defp format_target(other), do: inspect(other)
 

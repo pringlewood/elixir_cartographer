@@ -3,6 +3,8 @@ defmodule ElixirCartographer.Analyzers.RouteMapper do
   Maps Phoenix routes, plugs, and pipelines.
   """
 
+  import ElixirCartographer.AstUtils, only: [parts_to_string: 1]
+
   @doc """
   Analyze parsed files for Phoenix routing patterns.
   Returns routes, pipelines, scopes, and plugs.
@@ -97,7 +99,7 @@ defmodule ElixirCartographer.Analyzers.RouteMapper do
   defp extract_plug_modules(ast, path) do
     {_, plugs} = Macro.prewalk(ast, [], fn
       {:defmodule, _meta, [{:__aliases__, _, parts} | rest]} = node, acc ->
-        module_name = Enum.map_join(parts, ".", &to_string/1)
+        module_name = parts_to_string(parts)
         has_call = has_function?(rest, :call)
         has_init = has_function?(rest, :init)
 

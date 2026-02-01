@@ -3,6 +3,8 @@ defmodule ElixirCartographer.Analyzers.ModuleGraph do
   Builds a graph of module relationships: who defines what, who uses/calls whom.
   """
 
+  import ElixirCartographer.AstUtils, only: [parts_to_string: 1]
+
   defstruct modules: %{}, edges: [], contexts: %{}
 
   @doc """
@@ -33,7 +35,7 @@ defmodule ElixirCartographer.Analyzers.ModuleGraph do
   defp extract_modules(ast, path) do
     {_, modules} = Macro.prewalk(ast, [], fn
       {:defmodule, _meta, [{:__aliases__, _, parts} | rest]} = node, acc ->
-        module_name = Enum.map_join(parts, ".", &to_string/1)
+        module_name = parts_to_string(parts)
 
         functions = extract_functions(rest)
         uses = extract_uses(rest)
@@ -84,7 +86,7 @@ defmodule ElixirCartographer.Analyzers.ModuleGraph do
   defp extract_uses(ast) do
     {_, uses} = Macro.prewalk(ast, [], fn
       {:use, _meta, [{:__aliases__, _, parts} | _opts]} = node, acc ->
-        {node, [Enum.map_join(parts, ".", &to_string/1) | acc]}
+        {node, [parts_to_string(parts) | acc]}
 
       node, acc ->
         {node, acc}
@@ -96,7 +98,7 @@ defmodule ElixirCartographer.Analyzers.ModuleGraph do
   defp extract_imports(ast) do
     {_, imports} = Macro.prewalk(ast, [], fn
       {:import, _meta, [{:__aliases__, _, parts} | _opts]} = node, acc ->
-        {node, [Enum.map_join(parts, ".", &to_string/1) | acc]}
+        {node, [parts_to_string(parts) | acc]}
 
       node, acc ->
         {node, acc}
@@ -108,7 +110,7 @@ defmodule ElixirCartographer.Analyzers.ModuleGraph do
   defp extract_aliases(ast) do
     {_, aliases} = Macro.prewalk(ast, [], fn
       {:alias, _meta, [{:__aliases__, _, parts} | _opts]} = node, acc ->
-        {node, [Enum.map_join(parts, ".", &to_string/1) | acc]}
+        {node, [parts_to_string(parts) | acc]}
 
       node, acc ->
         {node, acc}
@@ -120,7 +122,7 @@ defmodule ElixirCartographer.Analyzers.ModuleGraph do
   defp extract_behaviours(ast) do
     {_, behaviours} = Macro.prewalk(ast, [], fn
       {:@, _, [{:behaviour, _, [{:__aliases__, _, parts}]}]} = node, acc ->
-        {node, [Enum.map_join(parts, ".", &to_string/1) | acc]}
+        {node, [parts_to_string(parts) | acc]}
 
       node, acc ->
         {node, acc}

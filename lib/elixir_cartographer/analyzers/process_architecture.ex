@@ -3,6 +3,8 @@ defmodule ElixirCartographer.Analyzers.ProcessArchitecture do
   Maps supervision trees, GenServers, Agents, Tasks, and Broadway pipelines.
   """
 
+  import ElixirCartographer.AstUtils, only: [parts_to_string: 1]
+
   defstruct genservers: [], supervisors: [], agents: [], tasks: [], broadway: []
 
   @doc """
@@ -31,7 +33,7 @@ defmodule ElixirCartographer.Analyzers.ProcessArchitecture do
   defp extract_processes(ast, path, content) do
     {_, processes} = Macro.prewalk(ast, [], fn
       {:defmodule, _meta, [{:__aliases__, _, parts} | rest]} = node, acc ->
-        module_name = Enum.map_join(parts, ".", &to_string/1)
+        module_name = parts_to_string(parts)
         uses = extract_uses(rest)
 
         process =
@@ -77,7 +79,7 @@ defmodule ElixirCartographer.Analyzers.ProcessArchitecture do
   defp extract_uses(ast) do
     {_, uses} = Macro.prewalk(ast, [], fn
       {:use, _meta, [{:__aliases__, _, parts} | _]} = node, acc ->
-        {node, [Enum.map_join(parts, ".", &to_string/1) | acc]}
+        {node, [parts_to_string(parts) | acc]}
 
       node, acc ->
         {node, acc}

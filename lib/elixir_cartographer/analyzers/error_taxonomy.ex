@@ -3,6 +3,8 @@ defmodule ElixirCartographer.Analyzers.ErrorTaxonomy do
   Catalogs error handling patterns: rescue, catch, try blocks, error returns.
   """
 
+  import ElixirCartographer.AstUtils, only: [parts_to_string: 1]
+
   @doc """
   Analyze parsed files for error handling patterns.
   """
@@ -31,7 +33,7 @@ defmodule ElixirCartographer.Analyzers.ErrorTaxonomy do
               %{type: :rescue, exceptions: exception_types, path: path}
 
             {:->, _, [[{:__aliases__, _, parts}], _body]} ->
-              %{type: :rescue, exceptions: [Enum.map_join(parts, ".", &to_string/1)], path: path}
+              %{type: :rescue, exceptions: [parts_to_string(parts)], path: path}
 
             _ ->
               %{type: :rescue, exceptions: ["_"], path: path}
@@ -48,13 +50,13 @@ defmodule ElixirCartographer.Analyzers.ErrorTaxonomy do
 
   defp extract_exception_types(types) when is_list(types) do
     Enum.map(types, fn
-      {:__aliases__, _, parts} -> Enum.map_join(parts, ".", &to_string/1)
+      {:__aliases__, _, parts} -> parts_to_string(parts)
       other -> inspect(other)
     end)
   end
 
   defp extract_exception_types({:__aliases__, _, parts}) do
-    [Enum.map_join(parts, ".", &to_string/1)]
+    [parts_to_string(parts)]
   end
 
   defp extract_exception_types(_), do: ["_"]
