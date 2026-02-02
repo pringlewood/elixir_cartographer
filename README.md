@@ -1,5 +1,7 @@
 # 🗺️ Elixir Cartographer
 
+[![CI](https://github.com/pringlewood/elixir_cartographer/actions/workflows/ci.yml/badge.svg)](https://github.com/pringlewood/elixir_cartographer/actions/workflows/ci.yml)
+
 Reverse-engineer any Elixir codebase into LLM-ready documentation. Point it at a project and get a comprehensive `AGENTS.md` — modules, schemas, supervision trees, workflows, routes, git history, test coverage, and more.
 
 Built for the [AGENTS.md convention](https://docs.github.com/en/copilot/customizing-copilot/adding-repository-custom-instructions) used by Claude Code, Copilot, Cursor, and other AI coding agents.
