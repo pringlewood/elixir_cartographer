@@ -13,7 +13,8 @@ defmodule ElixirCartographer.Config do
     :mix_exs_path,
     skip_git: false,
     skip_tests: false,
-    verbose: false
+    verbose: false,
+    compact: false
   ]
 
   @doc """
@@ -38,7 +39,8 @@ defmodule ElixirCartographer.Config do
       mix_exs_path: Path.join(project_path, "mix.exs"),
       skip_git: Keyword.get(opts, :skip_git, false),
       skip_tests: Keyword.get(opts, :skip_tests, false),
-      verbose: Keyword.get(opts, :verbose, false)
+      verbose: Keyword.get(opts, :verbose, false),
+      compact: Keyword.get(opts, :compact, false)
     }
   end
 

@@ -3,6 +3,8 @@ defmodule ElixirCartographer.Synthesis.AgentsMdGenerator do
   Generates the comprehensive AGENTS.md file from analysis data.
   """
 
+  alias ElixirCartographer.Synthesis.MermaidGenerator
+
   @doc """
   Generate the full AGENTS.md content.
   """
@@ -13,6 +15,7 @@ defmodule ElixirCartographer.Synthesis.AgentsMdGenerator do
       domain_contexts(analysis),
       workflows_section(analysis),
       api_surface(analysis),
+      live_view_section(analysis),
       process_architecture(analysis),
       configuration_matrix(analysis),
       data_model(analysis),
@@ -124,10 +127,13 @@ defmodule ElixirCartographer.Synthesis.AgentsMdGenerator do
       end)
       |> Enum.join("\n")
 
+    context_diagram = MermaidGenerator.context_graph(analysis.module_graph)
+    diagram_section = if context_diagram != "", do: "\n### Context Dependency Graph\n\n#{context_diagram}\n", else: ""
+
     """
     ## Domain Contexts
 
-    #{context_sections}
+    #{context_sections}#{diagram_section}
 
     ---
 
@@ -166,10 +172,13 @@ defmodule ElixirCartographer.Synthesis.AgentsMdGenerator do
         end)
         |> Enum.join("\n")
 
+      workflow_diagrams = MermaidGenerator.workflow_diagrams(workflows)
+      diagram_section = if workflow_diagrams != "", do: "\n### State Diagrams\n\n#{workflow_diagrams}\n", else: ""
+
       """
       ## Workflows & State Machines
 
-      #{workflow_docs}
+      #{workflow_docs}#{diagram_section}
 
       ---
 
@@ -262,6 +271,96 @@ defmodule ElixirCartographer.Synthesis.AgentsMdGenerator do
     """
   end
 
+  defp live_view_section(analysis) do
+    lv = Map.get(analysis, :live_view)
+
+    if is_nil(lv) or (lv.live_views == [] and lv.live_components == [] and lv.function_components == []) do
+      """
+      ## LiveView & Components
+
+      No LiveView patterns detected.
+
+      ---
+
+      """
+    else
+      lv_docs =
+        if lv.live_views != [] do
+          lv.live_views
+          |> Enum.map(fn v ->
+            callbacks = Enum.map_join(v.callbacks, ", ", &"`#{&1}`")
+            events = if v.events != [], do: Enum.map_join(v.events, ", ", &"`\"#{&1}\"`"), else: "_none_"
+            nav = if v.navigation != [], do: Enum.map_join(v.navigation, ", ", &"`#{&1}`"), else: "_none_"
+
+            """
+            - **#{v.module}** — callbacks: #{callbacks}
+              - Events: #{events}
+              - Navigation: #{nav}
+            """
+          end)
+          |> Enum.join("")
+          |> then(&"### LiveView Modules\n\n#{&1}")
+        else
+          ""
+        end
+
+      lc_docs =
+        if lv.live_components != [] do
+          lv.live_components
+          |> Enum.map(fn c ->
+            callbacks = Enum.map_join(c.callbacks, ", ", &"`#{&1}`")
+            events = if c.events != [], do: Enum.map_join(c.events, ", ", &"`\"#{&1}\"`"), else: "_none_"
+            "- **#{c.module}** — callbacks: #{callbacks} | events: #{events}"
+          end)
+          |> Enum.join("\n")
+          |> then(&"\n### LiveComponent Modules\n\n#{&1}\n")
+        else
+          ""
+        end
+
+      fc_docs =
+        if lv.function_components != [] do
+          lv.function_components
+          |> Enum.map(fn fc ->
+            attrs = if fc.attrs != [], do: Enum.map_join(fc.attrs, ", ", fn a -> "`#{a.name}` (#{a.type})" end), else: "_none_"
+            slots = if fc.slots != [], do: Enum.map_join(fc.slots, ", ", &"`#{&1}`"), else: "_none_"
+            heex = if fc.has_heex, do: " ✓ HEEx", else: ""
+            "- **#{fc.module}** — attrs: #{attrs} | slots: #{slots}#{heex}"
+          end)
+          |> Enum.join("\n")
+          |> then(&"\n### Function Components\n\n#{&1}\n")
+        else
+          ""
+        end
+
+      # Design patterns summary
+      patterns = []
+      patterns = if lv.streams_usage != [], do: patterns ++ ["Uses streams for list management"], else: patterns
+      patterns = if lv.pubsub_patterns != [], do: patterns ++ ["Uses PubSub for real-time updates"], else: patterns
+      patterns = if lv.js_commands != [], do: ["Uses JS commands for client-side interactivity" | patterns], else: patterns
+      patterns = if lv.uploads != [], do: patterns ++ ["Uses LiveView uploads"], else: patterns
+      patterns = if lv.hooks != [], do: patterns ++ ["Uses JavaScript hooks (#{Enum.map_join(lv.hooks, ", ", &"`#{&1.hook}`")})"], else: patterns
+
+      pattern_docs =
+        if patterns != [] do
+          patterns
+          |> Enum.map_join("\n", &"- #{&1}")
+          |> then(&"\n### LiveView Design Patterns\n\n#{&1}\n")
+        else
+          ""
+        end
+
+      """
+      ## LiveView & Components
+
+      #{lv_docs}#{lc_docs}#{fc_docs}#{pattern_docs}
+
+      ---
+
+      """
+    end
+  end
+
   defp process_architecture(analysis) do
     procs = analysis.processes
 
@@ -311,10 +410,13 @@ defmodule ElixirCartographer.Synthesis.AgentsMdGenerator do
         ""
       end
 
+    sup_diagram = MermaidGenerator.supervision_tree(analysis.processes)
+    diagram_section = if sup_diagram != "", do: "\n### Supervision Tree\n\n#{sup_diagram}\n", else: ""
+
     """
     ## Process Architecture
 
-    #{supervisor_docs}#{genserver_docs}#{broadway_docs}#{agent_docs}
+    #{supervisor_docs}#{genserver_docs}#{broadway_docs}#{agent_docs}#{diagram_section}
 
     ---
 
@@ -423,11 +525,14 @@ defmodule ElixirCartographer.Synthesis.AgentsMdGenerator do
         end)
         |> Enum.join("\n")
 
+      erd_diagram = MermaidGenerator.schema_erd(schemas)
+      erd_section = if erd_diagram != "", do: "\n### Entity Relationship Diagram\n\n#{erd_diagram}\n", else: ""
+
       """
       ## Data Model
 
       #{length(schemas)} Ecto schemas detected.
-
+      #{erd_section}
       #{schema_docs}
 
       ---

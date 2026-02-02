@@ -10,6 +10,7 @@ defmodule Mix.Tasks.Cartographer.Map do
 
   - `--output`, `-o` — Output directory (default: <project>/cartographer_docs)
   - `--name`, `-n` — Project name (auto-detected from mix.exs)
+  - `--compact`, `-c` — Generate condensed output optimized for token efficiency
   - `--skip-git` — Skip git history analysis
   - `--skip-tests` — Skip test file analysis
   - `--verbose`, `-v` — Verbose output
@@ -26,6 +27,7 @@ defmodule Mix.Tasks.Cartographer.Map do
         strict: [
           output: :string,
           name: :string,
+          compact: :boolean,
           skip_git: :boolean,
           skip_tests: :boolean,
           verbose: :boolean
@@ -33,6 +35,7 @@ defmodule Mix.Tasks.Cartographer.Map do
         aliases: [
           o: :output,
           n: :name,
+          c: :compact,
           v: :verbose
         ]
       )

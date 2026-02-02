@@ -9,6 +9,7 @@ defmodule ElixirCartographer.CLI do
         strict: [
           output: :string,
           name: :string,
+          compact: :boolean,
           skip_git: :boolean,
           skip_tests: :boolean,
           verbose: :boolean,
@@ -17,6 +18,7 @@ defmodule ElixirCartographer.CLI do
         aliases: [
           o: :output,
           n: :name,
+          c: :compact,
           v: :verbose,
           h: :help
         ]
@@ -42,6 +44,7 @@ defmodule ElixirCartographer.CLI do
     Options:
       -o, --output <path>    Output directory (default: <project>/cartographer_docs)
       -n, --name <name>      Project name (auto-detected from mix.exs)
+      -c, --compact          Generate condensed output optimized for token efficiency
       --skip-git             Skip git history analysis
       --skip-tests           Skip test file analysis
       -v, --verbose          Verbose output

@@ -9,12 +9,13 @@ defmodule ElixirCartographer.Pipeline do
     EctoSchemas,
     ProcessArchitecture,
     RouteMapper,
+    LiveViewAnalyzer,
     ConfigMatrix,
     ErrorTaxonomy,
     WorkflowDetector
   }
   alias ElixirCartographer.Miners.{GitMiner, TestMiner}
-  alias ElixirCartographer.Synthesis.{AgentsMdGenerator, ContextDocsGenerator}
+  alias ElixirCartographer.Synthesis.{AgentsMdGenerator, CompactGenerator, ContextDocsGenerator}
 
   @doc """
   Run the full pipeline and return results.
@@ -49,6 +50,11 @@ defmodule ElixirCartographer.Pipeline do
     t = Progress.start("Route & plug mapping")
     routes = RouteMapper.analyze(parsed_files, config)
     Progress.info("Found #{length(routes.routes)} routes, #{length(routes.pipelines)} pipelines")
+    Progress.done(t)
+
+    t = Progress.start("LiveView & component analysis")
+    live_view = LiveViewAnalyzer.analyze(parsed_files)
+    Progress.info("Found #{length(live_view.live_views)} LiveViews, #{length(live_view.live_components)} components, #{length(live_view.function_components)} function components")
     Progress.done(t)
 
     t = Progress.start("Configuration matrix")
@@ -103,6 +109,7 @@ defmodule ElixirCartographer.Pipeline do
       schemas: schemas,
       processes: processes,
       routes: routes,
+      live_view: live_view,
       config_matrix: config_matrix,
       errors: errors,
       workflows: workflows,
@@ -112,8 +119,13 @@ defmodule ElixirCartographer.Pipeline do
       parsed_files: parsed_files
     }
 
-    t = Progress.start("Generating AGENTS.md")
-    agents_md = AgentsMdGenerator.generate(analysis)
+    t = Progress.start("Generating AGENTS.md#{if config.compact, do: " (compact)", else: ""}")
+    agents_md =
+      if config.compact do
+        CompactGenerator.generate(analysis)
+      else
+        AgentsMdGenerator.generate(analysis)
+      end
     Progress.done(t)
 
     t = Progress.start("Generating context docs")
