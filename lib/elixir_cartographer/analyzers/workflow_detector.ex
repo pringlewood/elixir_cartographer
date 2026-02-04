@@ -13,6 +13,12 @@ defmodule ElixirCartographer.Analyzers.WorkflowDetector do
     # Find schemas with status-like fields
     status_schemas = find_status_schemas(schemas)
 
+    # Build a map of schema module -> source content for extracting enum values
+    schema_sources =
+      parsed_files
+      |> Enum.filter(fn {path, _} -> String.contains?(path, "/lib/") end)
+      |> Map.new()
+
     # Find transition functions
     transitions =
       parsed_files
@@ -34,6 +40,12 @@ defmodule ElixirCartographer.Analyzers.WorkflowDetector do
     # Combine into workflow patterns
     status_schemas
     |> Enum.map(fn schema ->
+      # Try to find schema source for enum extraction
+      schema_content = find_schema_source(schema.module, schema_sources)
+
+      # Extract enum values from schema definition
+      enum_values = extract_enum_values_from_schema(schema_content, schema.status_fields)
+
       related_transitions =
         transitions
         |> Enum.filter(fn t ->
@@ -49,9 +61,11 @@ defmodule ElixirCartographer.Analyzers.WorkflowDetector do
         end)
 
       status_values =
-        (Enum.flat_map(related_transitions, & &1.values) ++
+        (enum_values ++
+           Enum.flat_map(related_transitions, & &1.values) ++
            Enum.flat_map(related_branches, & &1.values))
         |> Enum.uniq()
+        |> filter_likely_status_values()
 
       %{
         module: schema.module,
@@ -156,5 +170,124 @@ defmodule ElixirCartographer.Analyzers.WorkflowDetector do
     |> String.split(".")
     |> Enum.take(2)
     |> Enum.join(".")
+  end
+
+  # Find the source content for a schema module
+  defp find_schema_source(module_name, schema_sources) do
+    # Convert module name to likely file path patterns
+    short_name =
+      module_name
+      |> String.split(".")
+      |> List.last()
+      |> Macro.underscore()
+
+    schema_sources
+    |> Enum.find_value("", fn {path, %{content: content}} ->
+      if String.contains?(path, short_name <> ".ex") do
+        content
+      end
+    end)
+  end
+
+  # Extract enum values from Ecto.Enum definitions in schema source
+  defp extract_enum_values_from_schema(content, status_fields) when is_binary(content) do
+    status_field_names = Enum.map(status_fields, & &1.name) |> Enum.map(&to_string/1)
+
+    # Pattern 1: Ecto.Enum with values: [...] or values: ~w(...)a
+    enum_pattern = ~r/field\s+:(#{Enum.join(status_field_names, "|")})\s*,\s*Ecto\.Enum\s*,\s*values:\s*(\[[^\]]+\]|~w\([^)]+\)a?)/
+
+    enum_values =
+      Regex.scan(enum_pattern, content)
+      |> Enum.flat_map(fn
+        [_, _field, values_str] -> parse_values_list(values_str)
+      end)
+
+    # Pattern 2: validate_inclusion for status fields (with module attr or inline list)
+    # Handles both `validate_inclusion(changeset, :status, [...])` and `|> validate_inclusion(:status, [...])`
+    validation_pattern = ~r/validate_inclusion\(\s*(?:\w+\s*,\s*)?:(#{Enum.join(status_field_names, "|")})\s*,\s*(\[[^\]]+\]|~w\([^)]+\)a?|@\w+)/
+
+    validation_values =
+      Regex.scan(validation_pattern, content)
+      |> Enum.flat_map(fn
+        [_, _field, "@" <> attr_name] ->
+          # Referenced module attribute - try to find it
+          attr_pattern = ~r/@#{attr_name}\s+(\[[^\]]+\]|~w\([^)]+\)a?)/
+          case Regex.run(attr_pattern, content) do
+            [_, values_str] -> parse_values_list(values_str)
+            _ -> []
+          end
+        [_, _field, values_str] ->
+          parse_values_list(values_str)
+      end)
+
+    # Pattern 3: @statuses or @states module attribute
+    attr_pattern = ~r/@(statuses?|states?|status_values?|state_values?)\s+(\[[^\]]+\]|~w\([^)]+\)a?)/
+
+    attr_values =
+      Regex.scan(attr_pattern, content)
+      |> Enum.flat_map(fn
+        [_, _attr, values_str] -> parse_values_list(values_str)
+      end)
+
+    (enum_values ++ validation_values ++ attr_values) |> Enum.uniq()
+  end
+
+  defp extract_enum_values_from_schema(_, _), do: []
+
+  # Parse a list of values from various Elixir syntax forms
+  defp parse_values_list(str) do
+    cond do
+      # ~w(foo bar baz)a format
+      String.starts_with?(str, "~w") ->
+        str
+        |> String.replace(~r/~w\(|\)a?/, "")
+        |> String.split(~r/\s+/, trim: true)
+
+      # [:foo, :bar, :baz] or ["foo", "bar"] format
+      String.starts_with?(str, "[") ->
+        str
+        |> String.replace(~r/[\[\]]/, "")
+        |> String.split(",")
+        |> Enum.map(fn s ->
+          s
+          |> String.trim()
+          |> String.replace(~r/^:|^"|"$/, "")
+        end)
+        |> Enum.reject(&(&1 == ""))
+
+      true ->
+        []
+    end
+  end
+
+  # Filter to only likely status/state values
+  defp filter_likely_status_values(values) do
+    known_good = ~w(
+      pending active inactive completed done finished
+      triggered acknowledged resolved
+      draft submitted approved rejected
+      open closed cancelled canceled
+      processing queued scheduled
+      failed error success
+      enabled disabled
+      started stopped paused running
+      published unpublished archived
+      accepted declined
+      sent delivered read
+      new in_progress on_hold blocked
+      investigating identified monitoring
+      critical high medium low info
+    )
+
+    values
+    |> Enum.filter(fn v ->
+      v_lower = String.downcase(v)
+      # Keep if it's a known status value OR looks like a status
+      v_lower in known_good ||
+        String.contains?(v_lower, "status") ||
+        String.contains?(v_lower, "state") ||
+        String.ends_with?(v_lower, "ed") ||
+        String.ends_with?(v_lower, "ing")
+    end)
   end
 end

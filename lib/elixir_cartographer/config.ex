@@ -14,7 +14,8 @@ defmodule ElixirCartographer.Config do
     skip_git: false,
     skip_tests: false,
     verbose: false,
-    compact: false
+    compact: false,
+    user_docs: false
   ]
 
   @doc """
@@ -40,7 +41,8 @@ defmodule ElixirCartographer.Config do
       skip_git: Keyword.get(opts, :skip_git, false),
       skip_tests: Keyword.get(opts, :skip_tests, false),
       verbose: Keyword.get(opts, :verbose, false),
-      compact: Keyword.get(opts, :compact, false)
+      compact: Keyword.get(opts, :compact, false),
+      user_docs: Keyword.get(opts, :user_docs, false)
     }
   end
 

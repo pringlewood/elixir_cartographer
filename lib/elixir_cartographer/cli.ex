@@ -10,6 +10,7 @@ defmodule ElixirCartographer.CLI do
           output: :string,
           name: :string,
           compact: :boolean,
+          user_docs: :boolean,
           skip_git: :boolean,
           skip_tests: :boolean,
           verbose: :boolean,
@@ -19,6 +20,7 @@ defmodule ElixirCartographer.CLI do
           o: :output,
           n: :name,
           c: :compact,
+          u: :user_docs,
           v: :verbose,
           h: :help
         ]
@@ -45,6 +47,8 @@ defmodule ElixirCartographer.CLI do
       -o, --output <path>    Output directory (default: <project>/cartographer_docs)
       -n, --name <name>      Project name (auto-detected from mix.exs)
       -c, --compact          Generate condensed output optimized for token efficiency
+      -u, --user-docs        Generate USER_DOCS.md for non-technical audiences
+                             (helpdesk, LLM training, onboarding)
       --skip-git             Skip git history analysis
       --skip-tests           Skip test file analysis
       -v, --verbose          Verbose output

@@ -15,7 +15,7 @@ defmodule ElixirCartographer.Pipeline do
     WorkflowDetector
   }
   alias ElixirCartographer.Miners.{GitMiner, TestMiner}
-  alias ElixirCartographer.Synthesis.{AgentsMdGenerator, CompactGenerator, ContextDocsGenerator}
+  alias ElixirCartographer.Synthesis.{AgentsMdGenerator, CompactGenerator, ContextDocsGenerator, UserDocsGenerator}
 
   @doc """
   Run the full pipeline and return results.
@@ -132,8 +132,18 @@ defmodule ElixirCartographer.Pipeline do
     context_docs = ContextDocsGenerator.generate(analysis)
     Progress.done(t)
 
+    user_docs =
+      if config.user_docs do
+        t = Progress.start("Generating USER_DOCS.md (non-technical docs)")
+        docs = UserDocsGenerator.generate(analysis)
+        Progress.done(t)
+        docs
+      else
+        nil
+      end
+
     t = Progress.start("Writing output files")
-    write_output(config, agents_md, context_docs)
+    write_output(config, agents_md, context_docs, user_docs)
     Progress.done(t)
 
     elapsed = System.monotonic_time(:millisecond) - pipeline_start
@@ -185,7 +195,7 @@ defmodule ElixirCartographer.Pipeline do
     results
   end
 
-  defp write_output(config, agents_md, context_docs) do
+  defp write_output(config, agents_md, context_docs, user_docs \\ nil) do
     File.mkdir_p!(config.output_path)
 
     # Write AGENTS.md
@@ -199,5 +209,11 @@ defmodule ElixirCartographer.Pipeline do
     Enum.each(context_docs, fn {filename, content} ->
       File.write!(Path.join(docs_dir, filename), content)
     end)
+
+    # Write USER_DOCS.md if generated
+    if user_docs do
+      user_docs_path = Path.join(config.output_path, "USER_DOCS.md")
+      File.write!(user_docs_path, user_docs)
+    end
   end
 end
