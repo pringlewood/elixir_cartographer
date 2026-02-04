@@ -106,7 +106,11 @@ defmodule ElixirCartographer.Synthesis.UserDocsGenerator do
   # ---------------------------------------------------------------------------
 
   defp what_you_can_do_section(analysis, docs_lookup) do
-    actions = extract_user_actions(analysis, docs_lookup)
+    # Get intents from code analysis
+    intents = Map.get(analysis, :intents, [])
+    intent_map = build_intent_map(intents)
+
+    actions = extract_user_actions(analysis, docs_lookup, intent_map)
 
     if actions == [] do
       nil
@@ -135,7 +139,15 @@ defmodule ElixirCartographer.Synthesis.UserDocsGenerator do
     end
   end
 
-  defp extract_user_actions(analysis, docs_lookup) do
+  defp build_intent_map(intents) do
+    intents
+    |> Enum.flat_map(fn ctx ->
+      Enum.map(ctx.actions, fn a -> {{ctx.context, a.name}, a.intent} end)
+    end)
+    |> Map.new()
+  end
+
+  defp extract_user_actions(analysis, docs_lookup, intent_map) do
     # From routes - each route is something a user can do
     route_actions =
       analysis.routes.routes
@@ -143,10 +155,11 @@ defmodule ElixirCartographer.Synthesis.UserDocsGenerator do
         area = humanize_controller(route.controller)
         action_name = route.action |> to_string()
 
-        # Try to get @doc for this action
-        doc = find_function_doc(route.controller, action_name, docs_lookup)
-
-        description = doc || action_to_description(action_name, area)
+        # Priority: 1. Intent from code analysis, 2. @doc, 3. Default description
+        description = 
+          find_intent(area, action_name, intent_map) ||
+          find_function_doc(route.controller, action_name, docs_lookup) ||
+          action_to_description(action_name, area)
 
         %{area: area, action: action_name, description: description}
       end)
@@ -168,8 +181,37 @@ defmodule ElixirCartographer.Synthesis.UserDocsGenerator do
         end)
       end)
 
-    (route_actions ++ event_actions)
+    # From intents - actions discovered from function analysis
+    intent_actions =
+      analysis
+      |> Map.get(:intents, [])
+      |> Enum.flat_map(fn ctx ->
+        ctx.actions
+        |> Enum.filter(fn a -> a.intent != nil end)
+        |> Enum.map(fn a ->
+          %{
+            area: humanize_module(ctx.context),
+            action: a.name,
+            description: a.intent
+          }
+        end)
+      end)
+
+    (route_actions ++ event_actions ++ intent_actions)
     |> Enum.uniq_by(fn a -> {a.area, a.description} end)
+    |> Enum.sort_by(fn a -> {a.area, a.action} end)
+  end
+
+  defp find_intent(area, action, intent_map) do
+    # Try different key combinations
+    keys = [
+      {area, action},
+      {String.downcase(area), action},
+      {area <> "s", action},  # Plural form
+      {Macro.camelize(area), action}
+    ]
+
+    Enum.find_value(keys, fn key -> Map.get(intent_map, key) end)
   end
 
   defp action_to_description(action, area) do

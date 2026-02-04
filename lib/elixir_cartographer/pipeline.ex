@@ -14,7 +14,8 @@ defmodule ElixirCartographer.Pipeline do
     ErrorTaxonomy,
     WorkflowDetector,
     RolesAnalyzer,
-    DocsExtractor
+    DocsExtractor,
+    IntentAnalyzer
   }
   alias ElixirCartographer.Miners.{GitMiner, TestMiner}
   alias ElixirCartographer.Synthesis.{AgentsMdGenerator, CompactGenerator, ContextDocsGenerator, UserDocsGenerator}
@@ -85,6 +86,11 @@ defmodule ElixirCartographer.Pipeline do
     Progress.info("Found #{length(docs)} documented items")
     Progress.done(t)
 
+    t = Progress.start("Intent analysis")
+    intents = IntentAnalyzer.analyze(parsed_files)
+    Progress.info("Found #{length(intents)} context intents")
+    Progress.done(t)
+
     # Layer 2: Git Mining
     git_data =
       if config.skip_git do
@@ -129,6 +135,7 @@ defmodule ElixirCartographer.Pipeline do
       roles: roles_data,
       docs: docs,
       docs_lookup: docs_lookup,
+      intents: intents,
       git: git_data,
       tests: test_data,
       source_files: source_files,
