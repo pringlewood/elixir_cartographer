@@ -276,13 +276,14 @@ defmodule ElixirCartographer.Synthesis.UserDocsGenerator do
 
   defp data_concepts_section(analysis) do
     schemas = analysis.schemas
+    docs_lookup = Map.get(analysis, :docs_lookup, %{})
 
     if schemas == [] do
       nil
     else
       concepts =
         schemas
-        |> Enum.map(&format_data_concept/1)
+        |> Enum.map(fn s -> format_data_concept(s, docs_lookup) end)
         |> Enum.join("\n\n")
 
       """
@@ -458,8 +459,11 @@ defmodule ElixirCartographer.Synthesis.UserDocsGenerator do
     end
   end
 
-  defp format_data_concept(schema) do
+  defp format_data_concept(schema, docs_lookup) do
     name = humanize_module(short_name(schema.module))
+
+    # Try to get description from @moduledoc
+    description = get_module_description(schema.module, docs_lookup) || describe_concept(name)
 
     fields =
       schema.fields
@@ -485,7 +489,7 @@ defmodule ElixirCartographer.Synthesis.UserDocsGenerator do
     """
     ### #{name}
 
-    #{describe_concept(name)}
+    #{description}
 
     **Information tracked:**
     #{fields}#{relationships}
@@ -493,11 +497,39 @@ defmodule ElixirCartographer.Synthesis.UserDocsGenerator do
     |> String.trim()
   end
 
+  defp get_module_description(module_name, docs_lookup) do
+    # Try to find docs for this module
+    # Handle both "Schedules" and "OnCallManager.Schedules"
+    search_name = short_name(module_name)
+    
+    matching_key = 
+      docs_lookup
+      |> Map.keys()
+      |> Enum.find(fn key -> 
+        key_short = short_name(key)
+        key_short == search_name ||
+        String.ends_with?(key, ".#{search_name}") ||
+        key == module_name
+      end)
+
+    case matching_key && Map.get(docs_lookup, matching_key) do
+      %{module_doc: %{summary: summary}} when is_binary(summary) and summary != "" ->
+        # Clean up generic Phoenix context docs like "The Accounts context."
+        if Regex.match?(~r/^The \w+ context\.?$/, summary) do
+          nil
+        else
+          summary
+        end
+      _ -> nil
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # Extraction Helpers
   # ---------------------------------------------------------------------------
 
-  defp extract_features(routes, live_views, _analysis) do
+  defp extract_features(routes, live_views, analysis) do
+    docs_lookup = Map.get(analysis, :docs_lookup, %{})
     # Group routes by controller to identify features
     controller_groups =
       routes
@@ -508,10 +540,14 @@ defmodule ElixirCartographer.Synthesis.UserDocsGenerator do
       |> Enum.map(fn {controller, ctrl_routes} ->
         name = humanize_module(short_name(controller))
         actions = ctrl_routes |> Enum.map(& &1.action) |> Enum.uniq()
+        
+        # Try to get description from controller's context module docs
+        context_module = infer_context_module(controller)
+        description = get_module_description(context_module, docs_lookup) || describe_feature(name, actions)
 
         %{
           name: name,
-          description: describe_feature(name, actions),
+          description: description,
           actions: Enum.map(actions, &humanize_action/1)
         }
       end)
@@ -624,6 +660,33 @@ defmodule ElixirCartographer.Synthesis.UserDocsGenerator do
 
   defp short_name(module) when is_atom(module) do
     module |> to_string() |> short_name()
+  end
+
+  # Infer context module from controller name
+  # e.g., "IncidentController" -> "Incidents"
+  # e.g., "MyAppWeb.IncidentController" -> "MyApp.Incidents"
+  defp infer_context_module(controller) do
+    # Strip Controller suffix and Web prefix
+    base = 
+      controller
+      |> String.replace("Controller", "")
+      |> String.replace("Web.", ".")
+      |> String.replace(~r/^\./, "")  # Remove leading dot if present
+    
+    # If it's just a name like "Incident", pluralize it
+    if String.contains?(base, ".") do
+      # Has a namespace - extract and pluralize last part
+      case Regex.run(~r/\.(\w+)$/, base) do
+        [_, name] ->
+          prefix = String.replace(base, ~r/\.#{name}$/, "")
+          "#{prefix}.#{name}s"
+        _ ->
+          base <> "s"
+      end
+    else
+      # Simple name - just pluralize
+      base <> "s"
+    end
   end
 
   defp humanize_module(name) do
