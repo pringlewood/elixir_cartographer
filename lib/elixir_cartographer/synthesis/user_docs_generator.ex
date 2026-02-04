@@ -20,7 +20,9 @@ defmodule ElixirCartographer.Synthesis.UserDocsGenerator do
     [
       title_section(project_name),
       overview_section(analysis),
+      roles_section(analysis),
       features_section(analysis),
+      user_actions_section(analysis),
       pages_section(analysis),
       workflows_section(analysis),
       data_concepts_section(analysis),
@@ -61,6 +63,120 @@ defmodule ElixirCartographer.Synthesis.UserDocsGenerator do
     This guide walks through each feature and explains how users interact with the system.
     """
     |> String.trim()
+  end
+
+  defp roles_section(analysis) do
+    roles_data = Map.get(analysis, :roles, %{roles: [], permissions: [], policies: []})
+
+    # Consolidate all role values
+    all_roles =
+      roles_data.roles
+      |> Enum.flat_map(& &1.values)
+      |> Enum.uniq()
+
+    if all_roles == [] do
+      nil
+    else
+      role_docs =
+        all_roles
+        |> Enum.map(&format_role/1)
+        |> Enum.join("\n")
+
+      permissions_docs =
+        if roles_data.permissions != [] do
+          perm_list =
+            roles_data.permissions
+            |> Enum.map(fn p -> "- **#{humanize_action(p.action)}** (#{p.context})" end)
+            |> Enum.uniq()
+            |> Enum.take(15)
+            |> Enum.join("\n")
+
+          "\n\n### Permissions\n\nActions that can be controlled by role:\n\n#{perm_list}"
+        else
+          ""
+        end
+
+      """
+      ## User Roles & Permissions
+
+      The system supports different user roles with varying levels of access:
+
+      #{role_docs}#{permissions_docs}
+      """
+      |> String.trim()
+    end
+  end
+
+  defp format_role(role) do
+    description = case String.downcase(role) do
+      "owner" -> "Full access to all features. Can manage billing, delete the organisation, and transfer ownership."
+      "admin" -> "Can manage users, settings, and most features. Cannot delete the organisation or manage billing."
+      "member" -> "Standard access to core features. Can view and interact with most functionality."
+      "viewer" -> "Read-only access. Can view data but cannot make changes."
+      "user" -> "Basic user access with standard permissions."
+      "guest" -> "Limited access, typically for temporary or external users."
+      "moderator" -> "Can moderate content and manage community features."
+      "editor" -> "Can create and edit content but has limited administrative access."
+      "manager" -> "Can manage team members and oversee operations."
+      "super_admin" -> "System-wide administrative access across all organisations."
+      _ -> "Access level: #{humanize_state(role)}"
+    end
+
+    "### #{String.capitalize(role)}\n\n#{description}"
+  end
+
+  defp user_actions_section(analysis) do
+    live_views = analysis.live_view.live_views
+    routes = analysis.routes.routes
+
+    # Collect all user-triggerable actions
+    live_view_actions =
+      live_views
+      |> Enum.flat_map(fn lv ->
+        events = Map.get(lv, :events, [])
+        Enum.map(events, fn e -> %{action: e, source: "Interactive", context: short_name(lv.module)} end)
+      end)
+
+    route_actions =
+      routes
+      |> Enum.filter(fn r -> r.method in ["POST", "PUT", "PATCH", "DELETE"] end)
+      |> Enum.map(fn r ->
+        %{action: r.action, source: r.method, context: short_name(r.controller)}
+      end)
+
+    all_actions = live_view_actions ++ route_actions
+
+    if all_actions == [] do
+      nil
+    else
+      # Group by context
+      grouped =
+        all_actions
+        |> Enum.group_by(& &1.context)
+        |> Enum.sort_by(fn {ctx, _} -> ctx end)
+
+      action_docs =
+        grouped
+        |> Enum.map(fn {context, actions} ->
+          action_list =
+            actions
+            |> Enum.map(fn a -> "- #{humanize_event(a.action)}" end)
+            |> Enum.uniq()
+            |> Enum.join("\n")
+
+          "### #{humanize_module(context)}\n\n#{action_list}"
+        end)
+        |> Enum.join("\n\n")
+
+      """
+      ## User Actions
+
+      Things users can do in the application:
+
+      #{action_docs}
+      """
+      |> String.trim()
+    end
   end
 
   defp features_section(analysis) do
@@ -442,12 +558,17 @@ defmodule ElixirCartographer.Synthesis.UserDocsGenerator do
   end
 
   defp gather_stats(analysis) do
+    roles_data = Map.get(analysis, :roles, %{roles: [], permissions: []})
+    all_roles = roles_data.roles |> Enum.flat_map(& &1.values) |> Enum.uniq()
+
     %{
       pages: length(analysis.live_view.live_views),
       routes: length(analysis.routes.routes),
       data_types: length(analysis.schemas),
       workflows: length(Enum.filter(analysis.workflows, fn w -> length(w.status_values) >= 2 end)),
-      components: length(analysis.live_view.live_components) + length(analysis.live_view.function_components)
+      components: length(analysis.live_view.live_components) + length(analysis.live_view.function_components),
+      roles: length(all_roles),
+      permissions: length(roles_data.permissions)
     }
   end
 
@@ -457,6 +578,7 @@ defmodule ElixirCartographer.Synthesis.UserDocsGenerator do
       if(stats.routes > 0, do: "- **#{stats.routes}** available endpoints"),
       if(stats.data_types > 0, do: "- **#{stats.data_types}** types of data"),
       if(stats.workflows > 0, do: "- **#{stats.workflows}** workflows with tracked states"),
+      if(stats.roles > 0, do: "- **#{stats.roles}** user roles"),
       if(stats.components > 0, do: "- **#{stats.components}** reusable UI components")
     ]
     |> Enum.reject(&is_nil/1)

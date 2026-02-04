@@ -12,7 +12,8 @@ defmodule ElixirCartographer.Pipeline do
     LiveViewAnalyzer,
     ConfigMatrix,
     ErrorTaxonomy,
-    WorkflowDetector
+    WorkflowDetector,
+    RolesAnalyzer
   }
   alias ElixirCartographer.Miners.{GitMiner, TestMiner}
   alias ElixirCartographer.Synthesis.{AgentsMdGenerator, CompactGenerator, ContextDocsGenerator, UserDocsGenerator}
@@ -72,6 +73,11 @@ defmodule ElixirCartographer.Pipeline do
     Progress.info("Found #{length(workflows)} workflow patterns")
     Progress.done(t)
 
+    t = Progress.start("Roles & permissions analysis")
+    roles_data = RolesAnalyzer.analyze(parsed_files)
+    Progress.info("Found #{length(roles_data.roles)} role definitions, #{length(roles_data.permissions)} permissions")
+    Progress.done(t)
+
     # Layer 2: Git Mining
     git_data =
       if config.skip_git do
@@ -113,6 +119,7 @@ defmodule ElixirCartographer.Pipeline do
       config_matrix: config_matrix,
       errors: errors,
       workflows: workflows,
+      roles: roles_data,
       git: git_data,
       tests: test_data,
       source_files: source_files,
