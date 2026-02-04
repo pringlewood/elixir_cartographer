@@ -17,12 +17,14 @@ defmodule ElixirCartographer.Analyzers.RolesAnalyzer do
     permissions = extract_permissions(parsed_files)
     policies = extract_policies(parsed_files)
     auth_plugs = extract_auth_plugs(parsed_files)
+    role_capabilities = extract_role_capabilities(parsed_files)
 
     %{
       roles: roles,
       permissions: permissions,
       policies: policies,
-      auth_plugs: auth_plugs
+      auth_plugs: auth_plugs,
+      role_capabilities: role_capabilities
     }
   end
 
@@ -286,5 +288,166 @@ defmodule ElixirCartographer.Analyzers.RolesAnalyzer do
     path
     |> Path.basename(".ex")
     |> Macro.camelize()
+  end
+
+  # ---------------------------------------------------------------------------
+  # Role Capability Extraction (what each role can/cannot do)
+  # ---------------------------------------------------------------------------
+
+  defp extract_role_capabilities(parsed_files) do
+    parsed_files
+    |> Enum.flat_map(fn {path, %{content: content}} ->
+      extract_capabilities_from_content(content, path)
+    end)
+    |> group_capabilities_by_role()
+  end
+
+  defp extract_capabilities_from_content(content, path) do
+    capabilities = []
+
+    # Pattern 1: if role == "admin" / if membership.role == "owner"
+    capabilities = capabilities ++ extract_equality_checks(content, path)
+
+    # Pattern 2: if role != "owner" (negation - means others CAN do this)
+    capabilities = capabilities ++ extract_negation_checks(content, path)
+
+    # Pattern 3: role in ["admin", "owner"]
+    capabilities = capabilities ++ extract_inclusion_checks(content, path)
+
+    # Pattern 4: case role do patterns
+    capabilities = capabilities ++ extract_case_patterns(content, path)
+
+    capabilities
+  end
+
+  defp extract_equality_checks(content, path) do
+    # Match: role == "admin", membership.role == "owner", etc.
+    pattern = ~r/(?:if|when|&&|\|\|)\s+[\w.]*role\s*==\s*[:\"](\w+)[:\"]?\s*(?:do|,|->)?\s*\n?([\s\S]{0,200}?)(?:else|end|\n\n)/
+
+    Regex.scan(pattern, content)
+    |> Enum.flat_map(fn [_, role, context_block] ->
+      action = extract_action_from_context(context_block, path)
+      if action do
+        [%{role: role, capability: action, type: :can, path: path}]
+      else
+        []
+      end
+    end)
+  end
+
+  defp extract_negation_checks(content, path) do
+    # Match: role != "owner" means non-owners CAN do something
+    pattern = ~r/(?:if|when|&&)\s+[\w.]*role\s*!=\s*[:\"](\w+)[:\"]?\s*(?:do|,|->)?\s*\n?([\s\S]{0,200}?)(?:else|end|\n\n)/
+
+    Regex.scan(pattern, content)
+    |> Enum.flat_map(fn [_, excluded_role, context_block] ->
+      action = extract_action_from_context(context_block, path)
+      if action do
+        [%{role: excluded_role, capability: action, type: :cannot, path: path}]
+      else
+        []
+      end
+    end)
+  end
+
+  defp extract_inclusion_checks(content, path) do
+    # Match: role in ["admin", "owner"] or role in ~w(admin owner)
+    pattern = ~r/[\w.]*role\s+in\s+(\[[^\]]+\]|~w\([^)]+\)a?)\s*(?:do|,|->)?\s*\n?([\s\S]{0,200}?)(?:else|end|\n\n)/
+
+    Regex.scan(pattern, content)
+    |> Enum.flat_map(fn [_, roles_str, context_block] ->
+      roles = parse_values(roles_str)
+      action = extract_action_from_context(context_block, path)
+      if action && roles != [] do
+        Enum.map(roles, fn role ->
+          %{role: role, capability: action, type: :can, path: path}
+        end)
+      else
+        []
+      end
+    end)
+  end
+
+  defp extract_case_patterns(content, path) do
+    # Match case expressions on role
+    pattern = ~r/case\s+[\w.]*role\s+do([\s\S]*?)end/
+
+    Regex.scan(pattern, content)
+    |> Enum.flat_map(fn [_, case_body] ->
+      # Extract individual patterns: "admin" -> ..., :owner -> ...
+      branch_pattern = ~r/[:\"](\w+)[:\"]?\s*->([\s\S]*?)(?=\n\s*[:\"]|\n\s*_|\z)/
+
+      Regex.scan(branch_pattern, case_body)
+      |> Enum.flat_map(fn [_, role, branch_content] ->
+        action = extract_action_from_context(branch_content, path)
+        if action do
+          [%{role: role, capability: action, type: :can, path: path}]
+        else
+          []
+        end
+      end)
+    end)
+  end
+
+  # Try to determine what action/capability is being guarded
+  defp extract_action_from_context(context, path) do
+    context_lower = String.downcase(context)
+    file_context = Path.basename(path, ".ex") |> String.downcase()
+
+    cond do
+      # Look for specific action indicators in context
+      String.contains?(context_lower, "delete") || String.contains?(context_lower, "remove") ->
+        infer_resource(file_context) <> " deletion"
+
+      String.contains?(context_lower, "update") || String.contains?(context_lower, "edit") ->
+        infer_resource(file_context) <> " editing"
+
+      String.contains?(context_lower, "create") || String.contains?(context_lower, "new") || String.contains?(context_lower, "add") ->
+        infer_resource(file_context) <> " creation"
+
+      String.contains?(context_lower, "invite") ->
+        "inviting members"
+
+      String.contains?(context_lower, "role") && String.contains?(context_lower, "change") ->
+        "changing member roles"
+
+      String.contains?(context_lower, "billing") || String.contains?(context_lower, "stripe") ->
+        "billing management"
+
+      String.contains?(context_lower, "settings") || String.contains?(context_lower, "config") ->
+        "settings management"
+
+      String.contains?(file_context, "member") ->
+        "member management"
+
+      String.contains?(file_context, "organisation") || String.contains?(file_context, "organization") ->
+        "organisation settings"
+
+      # Default: try to infer from file name
+      true ->
+        nil
+    end
+  end
+
+  defp infer_resource(file_context) do
+    cond do
+      String.contains?(file_context, "member") -> "member"
+      String.contains?(file_context, "user") -> "user"
+      String.contains?(file_context, "team") -> "team"
+      String.contains?(file_context, "incident") -> "incident"
+      String.contains?(file_context, "schedule") -> "schedule"
+      String.contains?(file_context, "organisation") || String.contains?(file_context, "organization") -> "organisation"
+      true -> "resource"
+    end
+  end
+
+  defp group_capabilities_by_role(capabilities) do
+    capabilities
+    |> Enum.group_by(& &1.role)
+    |> Enum.map(fn {role, caps} ->
+      can = caps |> Enum.filter(& &1.type == :can) |> Enum.map(& &1.capability) |> Enum.uniq()
+      cannot = caps |> Enum.filter(& &1.type == :cannot) |> Enum.map(& &1.capability) |> Enum.uniq()
+      %{role: role, can: can, cannot: cannot}
+    end)
   end
 end

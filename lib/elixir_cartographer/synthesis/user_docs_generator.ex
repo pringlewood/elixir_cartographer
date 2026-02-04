@@ -66,7 +66,7 @@ defmodule ElixirCartographer.Synthesis.UserDocsGenerator do
   end
 
   defp roles_section(analysis) do
-    roles_data = Map.get(analysis, :roles, %{roles: [], permissions: [], policies: []})
+    roles_data = Map.get(analysis, :roles, %{roles: [], permissions: [], policies: [], role_capabilities: []})
 
     # Consolidate all role values
     all_roles =
@@ -77,10 +77,15 @@ defmodule ElixirCartographer.Synthesis.UserDocsGenerator do
     if all_roles == [] do
       nil
     else
+      # Get capabilities for each role
+      capabilities_map =
+        Map.get(roles_data, :role_capabilities, [])
+        |> Enum.into(%{}, fn cap -> {cap.role, cap} end)
+
       role_docs =
         all_roles
-        |> Enum.map(&format_role/1)
-        |> Enum.join("\n")
+        |> Enum.map(fn role -> format_role(role, Map.get(capabilities_map, role)) end)
+        |> Enum.join("\n\n")
 
       permissions_docs =
         if roles_data.permissions != [] do
@@ -91,7 +96,7 @@ defmodule ElixirCartographer.Synthesis.UserDocsGenerator do
             |> Enum.take(15)
             |> Enum.join("\n")
 
-          "\n\n### Permissions\n\nActions that can be controlled by role:\n\n#{perm_list}"
+          "\n\n### Controlled Actions\n\nActions that require specific permissions:\n\n#{perm_list}"
         else
           ""
         end
@@ -107,22 +112,33 @@ defmodule ElixirCartographer.Synthesis.UserDocsGenerator do
     end
   end
 
-  defp format_role(role) do
-    description = case String.downcase(role) do
-      "owner" -> "Full access to all features. Can manage billing, delete the organisation, and transfer ownership."
-      "admin" -> "Can manage users, settings, and most features. Cannot delete the organisation or manage billing."
-      "member" -> "Standard access to core features. Can view and interact with most functionality."
-      "viewer" -> "Read-only access. Can view data but cannot make changes."
-      "user" -> "Basic user access with standard permissions."
-      "guest" -> "Limited access, typically for temporary or external users."
-      "moderator" -> "Can moderate content and manage community features."
-      "editor" -> "Can create and edit content but has limited administrative access."
-      "manager" -> "Can manage team members and oversee operations."
-      "super_admin" -> "System-wide administrative access across all organisations."
-      _ -> "Access level: #{humanize_state(role)}"
-    end
+  defp format_role(role, nil) do
+    # No capabilities detected - provide minimal info
+    "### #{String.capitalize(role)}\n\nRole defined in the system."
+  end
 
-    "### #{String.capitalize(role)}\n\n#{description}"
+  defp format_role(role, %{can: can, cannot: cannot}) do
+    can_list =
+      if can != [] do
+        items = can |> Enum.map(fn c -> "- ✓ #{String.capitalize(c)}" end) |> Enum.join("\n")
+        "\n\n**Can:**\n#{items}"
+      else
+        ""
+      end
+
+    cannot_list =
+      if cannot != [] do
+        items = cannot |> Enum.map(fn c -> "- ✗ #{String.capitalize(c)}" end) |> Enum.join("\n")
+        "\n\n**Cannot:**\n#{items}"
+      else
+        ""
+      end
+
+    if can_list == "" && cannot_list == "" do
+      "### #{String.capitalize(role)}\n\nRole defined in the system."
+    else
+      "### #{String.capitalize(role)}#{can_list}#{cannot_list}"
+    end
   end
 
   defp user_actions_section(analysis) do
