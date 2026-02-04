@@ -1,33 +1,25 @@
 defmodule ElixirCartographer.Synthesis.UserDocsGenerator do
   @moduledoc """
-  Generates user-friendly documentation for non-technical audiences.
+  Generates end-user documentation from an Elixir codebase.
 
-  Outputs a single markdown file with:
-  - Plain English descriptions of features and workflows
-  - Mermaid diagrams for visual context
-  - State machine explanations
-  - Feature inventory for helpdesk/LLM training
+  Focus: What can users DO? How do things work? What do terms mean?
+  No code details, no field types, no schema internals.
   """
 
-  alias ElixirCartographer.Synthesis.MermaidGenerator
-
   @doc """
-  Generate a single USER_DOCS.md file from the analysis data.
+  Generate USER_DOCS.md - documentation for end users, not developers.
   """
   def generate(analysis) do
     project_name = format_project_name(analysis.config.project_name)
+    docs_lookup = Map.get(analysis, :docs_lookup, %{})
 
     [
       title_section(project_name),
-      overview_section(analysis),
-      roles_section(analysis),
-      features_section(analysis),
-      user_actions_section(analysis),
-      pages_section(analysis),
-      workflows_section(analysis),
-      data_concepts_section(analysis),
-      navigation_section(analysis),
-      glossary_section(analysis)
+      what_is_section(analysis, docs_lookup),
+      what_you_can_do_section(analysis, docs_lookup),
+      how_it_works_section(analysis, docs_lookup),
+      user_roles_section(analysis),
+      key_concepts_section(analysis, docs_lookup)
     ]
     |> Enum.reject(&is_nil/1)
     |> Enum.reject(&(&1 == ""))
@@ -35,159 +27,107 @@ defmodule ElixirCartographer.Synthesis.UserDocsGenerator do
   end
 
   # ---------------------------------------------------------------------------
-  # Section Generators
+  # Title
   # ---------------------------------------------------------------------------
 
   defp title_section(project_name) do
     """
     # #{project_name} — User Guide
 
-    > This document explains how #{project_name} works in plain language.
-    > Use it for onboarding, help desk support, or training AI assistants.
-
-    **Last generated:** #{Date.utc_today() |> Date.to_string()}
+    This guide explains what you can do with #{project_name} and how it works.
     """
     |> String.trim()
   end
 
-  defp overview_section(analysis) do
-    stats = gather_stats(analysis)
+  # ---------------------------------------------------------------------------
+  # What Is This System?
+  # ---------------------------------------------------------------------------
+
+  defp what_is_section(analysis, docs_lookup) do
+    # Try to find a top-level module doc that describes the app
+    app_description = find_app_description(analysis, docs_lookup)
+
+    capabilities = summarize_capabilities(analysis)
 
     """
-    ## Overview
+    ## What is #{format_project_name(analysis.config.project_name)}?
 
-    #{project_name(analysis)} is a web application with the following capabilities:
+    #{app_description}
 
-    #{stats_list(stats)}
-
-    This guide walks through each feature and explains how users interact with the system.
+    #{capabilities}
     """
     |> String.trim()
   end
 
-  defp roles_section(analysis) do
-    roles_data = Map.get(analysis, :roles, %{roles: [], permissions: [], policies: [], role_capabilities: []})
+  defp find_app_description(analysis, docs_lookup) do
+    # Look for application module or main context docs
+    project_name = analysis.config.project_name
 
-    # Consolidate all role values
-    all_roles =
-      roles_data.roles
-      |> Enum.flat_map(& &1.values)
-      |> Enum.uniq()
+    # Try different module name patterns
+    candidates = [
+      project_name |> Macro.camelize(),
+      "#{Macro.camelize(project_name)}Web",
+      "#{Macro.camelize(project_name)}.Application"
+    ]
 
-    if all_roles == [] do
-      nil
-    else
-      # Get capabilities for each role
-      capabilities_map =
-        Map.get(roles_data, :role_capabilities, [])
-        |> Enum.into(%{}, fn cap -> {cap.role, cap} end)
-
-      role_docs =
-        all_roles
-        |> Enum.map(fn role -> format_role(role, Map.get(capabilities_map, role)) end)
-        |> Enum.join("\n\n")
-
-      permissions_docs =
-        if roles_data.permissions != [] do
-          perm_list =
-            roles_data.permissions
-            |> Enum.map(fn p -> "- **#{humanize_action(p.action)}** (#{p.context})" end)
-            |> Enum.uniq()
-            |> Enum.take(15)
-            |> Enum.join("\n")
-
-          "\n\n### Controlled Actions\n\nActions that require specific permissions:\n\n#{perm_list}"
-        else
-          ""
+    description =
+      candidates
+      |> Enum.find_value(fn candidate ->
+        case Map.get(docs_lookup, candidate) do
+          %{module_doc: %{summary: summary}} when is_binary(summary) and summary != "" ->
+            unless generic_doc?(summary), do: summary
+          _ -> nil
         end
+      end)
 
-      """
-      ## User Roles & Permissions
-
-      The system supports different user roles with varying levels of access:
-
-      #{role_docs}#{permissions_docs}
-      """
-      |> String.trim()
-    end
+    description || "A web application built with Elixir and Phoenix."
   end
 
-  defp format_role(role, nil) do
-    # No capabilities detected - provide minimal info
-    "### #{String.capitalize(role)}\n\nRole defined in the system."
-  end
+  defp summarize_capabilities(analysis) do
+    parts = []
 
-  defp format_role(role, %{can: can, cannot: cannot}) do
-    can_list =
-      if can != [] do
-        items = can |> Enum.map(fn c -> "- ✓ #{String.capitalize(c)}" end) |> Enum.join("\n")
-        "\n\n**Can:**\n#{items}"
-      else
-        ""
-      end
+    # Count main features
+    live_views = length(analysis.live_view.live_views)
+    routes = length(analysis.routes.routes)
+    workflows = analysis.workflows |> Enum.filter(fn w -> length(w.status_values) >= 2 end) |> length()
 
-    cannot_list =
-      if cannot != [] do
-        items = cannot |> Enum.map(fn c -> "- ✗ #{String.capitalize(c)}" end) |> Enum.join("\n")
-        "\n\n**Cannot:**\n#{items}"
-      else
-        ""
-      end
+    parts = if live_views > 0, do: parts ++ ["#{live_views} interactive screens"], else: parts
+    parts = if workflows > 0, do: parts ++ ["#{workflows} tracked workflows"], else: parts
 
-    if can_list == "" && cannot_list == "" do
-      "### #{String.capitalize(role)}\n\nRole defined in the system."
+    if parts == [] do
+      ""
     else
-      "### #{String.capitalize(role)}#{can_list}#{cannot_list}"
+      "**At a glance:** " <> Enum.join(parts, ", ") <> "."
     end
   end
 
-  defp user_actions_section(analysis) do
-    live_views = analysis.live_view.live_views
-    routes = analysis.routes.routes
+  # ---------------------------------------------------------------------------
+  # What You Can Do
+  # ---------------------------------------------------------------------------
 
-    # Collect all user-triggerable actions
-    live_view_actions =
-      live_views
-      |> Enum.flat_map(fn lv ->
-        events = Map.get(lv, :events, [])
-        Enum.map(events, fn e -> %{action: e, source: "Interactive", context: short_name(lv.module)} end)
-      end)
+  defp what_you_can_do_section(analysis, docs_lookup) do
+    actions = extract_user_actions(analysis, docs_lookup)
 
-    route_actions =
-      routes
-      |> Enum.filter(fn r -> r.method in ["POST", "PUT", "PATCH", "DELETE"] end)
-      |> Enum.map(fn r ->
-        %{action: r.action, source: r.method, context: short_name(r.controller)}
-      end)
-
-    all_actions = live_view_actions ++ route_actions
-
-    if all_actions == [] do
+    if actions == [] do
       nil
     else
-      # Group by context
-      grouped =
-        all_actions
-        |> Enum.group_by(& &1.context)
-        |> Enum.sort_by(fn {ctx, _} -> ctx end)
-
       action_docs =
-        grouped
-        |> Enum.map(fn {context, actions} ->
+        actions
+        |> Enum.group_by(& &1.area)
+        |> Enum.sort_by(fn {area, _} -> area end)
+        |> Enum.map(fn {area, area_actions} ->
           action_list =
-            actions
-            |> Enum.map(fn a -> "- #{humanize_event(a.action)}" end)
+            area_actions
+            |> Enum.map(fn a -> "- #{a.description}" end)
             |> Enum.uniq()
             |> Enum.join("\n")
 
-          "### #{humanize_module(context)}\n\n#{action_list}"
+          "### #{area}\n\n#{action_list}"
         end)
         |> Enum.join("\n\n")
 
       """
-      ## User Actions
-
-      Things users can do in the application:
+      ## What You Can Do
 
       #{action_docs}
       """
@@ -195,67 +135,93 @@ defmodule ElixirCartographer.Synthesis.UserDocsGenerator do
     end
   end
 
-  defp features_section(analysis) do
-    routes = analysis.routes.routes
-    live_views = analysis.live_view.live_views
+  defp extract_user_actions(analysis, docs_lookup) do
+    # From routes - each route is something a user can do
+    route_actions =
+      analysis.routes.routes
+      |> Enum.map(fn route ->
+        area = humanize_controller(route.controller)
+        action_name = route.action |> to_string()
 
-    if routes == [] && live_views == [] do
-      nil
-    else
-      features = extract_features(routes, live_views, analysis)
+        # Try to get @doc for this action
+        doc = find_function_doc(route.controller, action_name, docs_lookup)
 
-      if features == [] do
-        nil
-      else
-        feature_docs =
-          features
-          |> Enum.map(&format_feature/1)
-          |> Enum.join("\n\n")
+        description = doc || action_to_description(action_name, area)
 
-        """
-        ## Features
+        %{area: area, action: action_name, description: description}
+      end)
+      |> Enum.uniq_by(fn a -> {a.area, a.action} end)
 
-        Below is a list of the main features available to users.
+    # From LiveView events - user interactions
+    event_actions =
+      analysis.live_view.live_views
+      |> Enum.flat_map(fn lv ->
+        area = humanize_module(short_name(lv.module))
+        events = Map.get(lv, :events, [])
 
-        #{feature_docs}
-        """
-        |> String.trim()
-      end
+        Enum.map(events, fn event ->
+          %{
+            area: area,
+            action: event,
+            description: event_to_description(event)
+          }
+        end)
+      end)
+
+    (route_actions ++ event_actions)
+    |> Enum.uniq_by(fn a -> {a.area, a.description} end)
+  end
+
+  defp action_to_description(action, area) do
+    area_lower = String.downcase(area)
+    area_plural = pluralize(area_lower)
+
+    case to_string(action) do
+      "index" -> "View all #{area_plural}"
+      "show" -> "View #{area_lower} details"
+      "new" -> "Create a new #{area_lower}"
+      "create" -> "Save a new #{area_lower}"
+      "edit" -> "Edit an existing #{area_lower}"
+      "update" -> "Save changes to a #{area_lower}"
+      "delete" -> "Remove a #{area_lower}"
+      "acknowledge" -> "Acknowledge (confirm you're handling it)"
+      "resolve" -> "Mark as resolved"
+      "escalate" -> "Escalate to the next person"
+      "export" -> "Export data"
+      "import" -> "Import data"
+      "search" -> "Search #{area_lower}s"
+      "filter" -> "Filter the list"
+      other -> humanize_action_name(other)
     end
   end
 
-  defp pages_section(analysis) do
-    live_views = analysis.live_view.live_views
-
-    if live_views == [] do
-      nil
-    else
-      pages =
-        live_views
-        |> Enum.map(&format_page/1)
-        |> Enum.join("\n\n")
-
-      """
-      ## Pages & Screens
-
-      The application includes the following interactive pages:
-
-      #{pages}
-      """
-      |> String.trim()
-    end
+  defp event_to_description(event) do
+    event
+    |> String.replace("_", " ")
+    |> String.replace("-", " ")
+    |> String.capitalize()
   end
 
-  defp workflows_section(analysis) do
-    workflows = analysis.workflows
+  defp humanize_action_name(action) do
+    action
+    |> to_string()
+    |> String.replace("_", " ")
+    |> String.capitalize()
+  end
+
+  # ---------------------------------------------------------------------------
+  # How It Works (Workflows)
+  # ---------------------------------------------------------------------------
+
+  defp how_it_works_section(analysis, docs_lookup) do
+    workflows = analysis.workflows |> Enum.filter(fn w -> length(w.status_values) >= 2 end)
 
     if workflows == [] do
       nil
     else
       workflow_docs =
         workflows
-        |> Enum.filter(fn w -> length(w.status_values) >= 2 end)
-        |> Enum.map(&format_workflow/1)
+        |> Enum.map(fn w -> format_workflow_for_users(w, docs_lookup) end)
         |> Enum.reject(&is_nil/1)
         |> Enum.join("\n\n")
 
@@ -263,9 +229,7 @@ defmodule ElixirCartographer.Synthesis.UserDocsGenerator do
         nil
       else
         """
-        ## Workflows & States
-
-        The system tracks items through different stages. Here's how each workflow operates:
+        ## How Things Work
 
         #{workflow_docs}
         """
@@ -274,384 +238,265 @@ defmodule ElixirCartographer.Synthesis.UserDocsGenerator do
     end
   end
 
-  defp data_concepts_section(analysis) do
-    schemas = analysis.schemas
-    docs_lookup = Map.get(analysis, :docs_lookup, %{})
-
-    if schemas == [] do
-      nil
-    else
-      concepts =
-        schemas
-        |> Enum.map(fn s -> format_data_concept(s, docs_lookup) end)
-        |> Enum.join("\n\n")
-
-      """
-      ## Data Concepts
-
-      The system works with the following types of information:
-
-      #{concepts}
-      """
-      |> String.trim()
-    end
-  end
-
-  defp navigation_section(analysis) do
-    routes = analysis.routes.routes
-    scopes = analysis.routes.scopes
-
-    if routes == [] do
-      nil
-    else
-      # Group routes by prefix
-      grouped = group_routes_by_area(routes, scopes)
-
-      nav_docs =
-        grouped
-        |> Enum.map(fn {area, area_routes} ->
-          route_list =
-            area_routes
-            |> Enum.take(10)
-            |> Enum.map(fn r -> "  - `#{r.path}` — #{humanize_action(r.action)}" end)
-            |> Enum.join("\n")
-
-          "### #{humanize_area(area)}\n\n#{route_list}"
-        end)
-        |> Enum.join("\n\n")
-
-      """
-      ## Navigation Map
-
-      Here's where users can go in the application:
-
-      #{nav_docs}
-      """
-      |> String.trim()
-    end
-  end
-
-  defp glossary_section(analysis) do
-    terms = extract_glossary_terms(analysis)
-
-    if terms == [] do
-      nil
-    else
-      term_docs =
-        terms
-        |> Enum.sort_by(& &1.term)
-        |> Enum.map(fn t -> "- **#{t.term}**: #{t.definition}" end)
-        |> Enum.join("\n")
-
-      """
-      ## Glossary
-
-      Key terms used in the application:
-
-      #{term_docs}
-      """
-      |> String.trim()
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # Formatters
-  # ---------------------------------------------------------------------------
-
-  defp format_feature(%{name: name, description: desc, actions: actions}) do
-    action_list =
-      if actions == [] do
-        ""
-      else
-        "\n\n**Available actions:**\n" <>
-          (actions |> Enum.map(&("- #{&1}")) |> Enum.join("\n"))
-      end
-
-    """
-    ### #{name}
-
-    #{desc}#{action_list}
-    """
-    |> String.trim()
-  end
-
-  defp format_page(live_view) do
-    module = short_name(live_view.module)
-    name = humanize_module(module)
-
-    events =
-      if Map.has_key?(live_view, :events) && live_view.events != [] do
-        event_list =
-          live_view.events
-          |> Enum.map(&humanize_event/1)
-          |> Enum.join(", ")
-
-        "\n\n**User can:** #{event_list}"
-      else
-        ""
-      end
-
-    callbacks =
-      if Map.has_key?(live_view, :callbacks) do
-        features =
-          live_view.callbacks
-          |> Enum.filter(&(&1 in [:handle_event, :handle_info, :handle_params]))
-          |> Enum.map(fn
-            :handle_event -> "respond to user actions"
-            :handle_info -> "receive real-time updates"
-            :handle_params -> "react to URL changes"
-          end)
-
-        if features != [] do
-          "\n\n**Capabilities:** #{Enum.join(features, ", ")}"
-        else
-          ""
-        end
-      else
-        ""
-      end
-
-    """
-    ### #{name}
-
-    An interactive page that updates in real-time.#{events}#{callbacks}
-    """
-    |> String.trim()
-  end
-
-  defp format_workflow(workflow) do
-    name = humanize_module(short_name(workflow.module))
+  defp format_workflow_for_users(workflow, docs_lookup) do
+    name = workflow.module |> short_name() |> humanize_module()
     states = workflow.status_values
 
+    # Get module doc for context
+    module_doc = find_module_summary(workflow.module, docs_lookup)
+    intro = module_doc || "#{name}s go through several stages:"
+
+    # Describe the journey
+    journey =
+      states
+      |> Enum.with_index()
+      |> Enum.map(fn {state, idx} ->
+        state_name = humanize_state(state)
+        explanation = explain_state_for_users(state)
+
+        if idx == 0 do
+          "1. **#{state_name}** — #{explanation}"
+        else
+          "#{idx + 1}. **#{state_name}** — #{explanation}"
+        end
+      end)
+      |> Enum.join("\n")
+
+    # Simple mermaid diagram
+    diagram = generate_simple_flow(states)
+
+    """
+    ### #{name}
+
+    #{intro}
+
+    #{journey}
+
+    #{diagram}
+    """
+    |> String.trim()
+  end
+
+  defp generate_simple_flow(states) do
     if length(states) < 2 do
-      nil
+      ""
     else
-      state_explanations =
+      transitions =
         states
-        |> Enum.map(fn s -> "- **#{humanize_state(s)}**: #{explain_state(s)}" end)
+        |> Enum.chunk_every(2, 1, :discard)
+        |> Enum.map(fn [from, to] ->
+          "    #{safe_id(from)} --> #{safe_id(to)}"
+        end)
         |> Enum.join("\n")
 
-      diagram = MermaidGenerator.workflow_diagram(workflow)
-
-      transitions_text =
-        if workflow.transitions != [] do
-          trans =
-            workflow.transitions
-            |> Enum.take(5)
-            |> Enum.map(fn t -> "- #{humanize_transition(t.function)}" end)
-            |> Enum.join("\n")
-
-          "\n\n**How items move between states:**\n\n#{trans}"
-        else
-          ""
-        end
-
       """
-      ### #{name} Workflow
-
-      Items of type **#{name}** move through these stages:
-
-      #{state_explanations}
-
-      #{if diagram != "", do: "**Visual diagram:**\n\n#{diagram}", else: ""}#{transitions_text}
+      ```mermaid
+      flowchart LR
+      #{transitions}
+      ```
       """
       |> String.trim()
     end
   end
 
-  defp format_data_concept(schema, docs_lookup) do
-    name = humanize_module(short_name(schema.module))
-
-    # Try to get description from @moduledoc
-    description = get_module_description(schema.module, docs_lookup) || describe_concept(name)
-
-    fields =
-      schema.fields
-      |> Enum.reject(fn f -> f.name in [:id, :inserted_at, :updated_at] end)
-      |> Enum.take(8)
-      |> Enum.map(fn f -> "- **#{humanize_field(f.name)}** (#{humanize_type(f.type)})" end)
-      |> Enum.join("\n")
-
-    relationships =
-      if schema.associations != [] do
-        rels =
-          schema.associations
-          |> Enum.map(fn a ->
-            "- #{relation_phrase(a.type)} #{humanize_module(to_string(a.target))}"
-          end)
-          |> Enum.join("\n")
-
-        "\n\n**Relationships:**\n#{rels}"
-      else
-        ""
-      end
-
-    """
-    ### #{name}
-
-    #{description}
-
-    **Information tracked:**
-    #{fields}#{relationships}
-    """
-    |> String.trim()
+  defp safe_id(state) do
+    state |> to_string() |> String.replace(~r/[^a-zA-Z0-9]/, "_")
   end
 
-  defp get_module_description(module_name, docs_lookup) do
-    # Try to find docs for this module
-    # Handle both "Schedules" and "OnCallManager.Schedules"
-    search_name = short_name(module_name)
-    
-    matching_key = 
-      docs_lookup
-      |> Map.keys()
-      |> Enum.find(fn key -> 
-        key_short = short_name(key)
-        key_short == search_name ||
-        String.ends_with?(key, ".#{search_name}") ||
-        key == module_name
-      end)
+  defp explain_state_for_users(state) do
+    state_lower = to_string(state) |> String.downcase()
 
-    case matching_key && Map.get(docs_lookup, matching_key) do
-      %{module_doc: %{summary: summary}} when is_binary(summary) and summary != "" ->
-        # Clean up generic Phoenix context docs like "The Accounts context."
-        if Regex.match?(~r/^The \w+ context\.?$/, summary) do
-          nil
-        else
-          summary
-        end
-      _ -> nil
+    cond do
+      state_lower in ~w(triggered new open created) ->
+        "Just happened, waiting for someone to respond"
+      state_lower in ~w(acknowledged acked accepted) ->
+        "Someone is working on it"
+      state_lower in ~w(resolved closed completed done finished) ->
+        "All done"
+      state_lower in ~w(pending waiting queued) ->
+        "Waiting to be processed"
+      state_lower in ~w(active running in_progress processing) ->
+        "Currently in progress"
+      state_lower in ~w(cancelled canceled rejected declined) ->
+        "Was stopped or rejected"
+      state_lower in ~w(failed error) ->
+        "Something went wrong"
+      state_lower in ~w(draft) ->
+        "Work in progress, not yet submitted"
+      state_lower in ~w(published live) ->
+        "Visible and active"
+      state_lower in ~w(archived) ->
+        "Stored for reference, no longer active"
+      state_lower in ~w(scheduled) ->
+        "Planned for a future time"
+      state_lower in ~w(paused suspended on_hold) ->
+        "Temporarily stopped"
+      state_lower in ~w(investigating) ->
+        "Looking into the issue"
+      state_lower in ~w(identified) ->
+        "Found the cause"
+      state_lower in ~w(monitoring) ->
+        "Watching to make sure it's fixed"
+      state_lower in ~w(sent delivered) ->
+        "Message has been sent"
+      state_lower in ~w(expired) ->
+        "No longer valid"
+      true ->
+        "In #{humanize_state(state)} stage"
     end
   end
 
   # ---------------------------------------------------------------------------
-  # Extraction Helpers
+  # User Roles
   # ---------------------------------------------------------------------------
 
-  defp extract_features(routes, live_views, analysis) do
-    docs_lookup = Map.get(analysis, :docs_lookup, %{})
-    # Group routes by controller to identify features
-    controller_groups =
-      routes
-      |> Enum.group_by(& &1.controller)
+  defp user_roles_section(analysis) do
+    roles_data = Map.get(analysis, :roles, %{roles: [], role_capabilities: []})
 
-    features_from_routes =
-      controller_groups
-      |> Enum.map(fn {controller, ctrl_routes} ->
-        name = humanize_module(short_name(controller))
-        actions = ctrl_routes |> Enum.map(& &1.action) |> Enum.uniq()
-        
-        # Try to get description from controller's context module docs
-        context_module = infer_context_module(controller)
-        description = get_module_description(context_module, docs_lookup) || describe_feature(name, actions)
+    all_roles =
+      roles_data.roles
+      |> Enum.flat_map(& &1.values)
+      |> Enum.uniq()
 
-        %{
-          name: name,
-          description: description,
-          actions: Enum.map(actions, &humanize_action/1)
-        }
-      end)
+    if all_roles == [] do
+      nil
+    else
+      capabilities_map =
+        Map.get(roles_data, :role_capabilities, [])
+        |> Enum.into(%{}, fn cap -> {cap.role, cap} end)
 
-    features_from_live_views =
-      live_views
-      |> Enum.filter(fn lv ->
-        module = short_name(lv.module)
-        not String.ends_with?(module, "Component")
-      end)
-      |> Enum.map(fn lv ->
-        name = humanize_module(short_name(lv.module))
-        events = Map.get(lv, :events, [])
-
-        %{
-          name: name,
-          description: "Interactive #{String.downcase(name)} with real-time updates.",
-          actions: Enum.map(events, &humanize_event/1)
-        }
-      end)
-
-    (features_from_routes ++ features_from_live_views)
-    |> Enum.uniq_by(& &1.name)
-  end
-
-  defp group_routes_by_area(routes, scopes) do
-    scope_prefixes = Enum.map(scopes, & &1.path) |> Enum.reject(&(&1 == "/"))
-
-    routes
-    |> Enum.group_by(fn route ->
-      matching_scope =
-        scope_prefixes
-        |> Enum.find(fn prefix -> String.starts_with?(route.path, prefix) end)
-
-      matching_scope || "/"
-    end)
-  end
-
-  defp extract_glossary_terms(analysis) do
-    # Extract terms from schemas, workflows, and routes
-    schema_terms =
-      analysis.schemas
-      |> Enum.map(fn s ->
-        name = short_name(s.module)
-        %{term: humanize_module(name), definition: describe_concept(humanize_module(name))}
-      end)
-
-    workflow_terms =
-      analysis.workflows
-      |> Enum.flat_map(fn w ->
-        w.status_values
-        |> Enum.map(fn state ->
-          %{term: humanize_state(state), definition: explain_state(state)}
+      role_docs =
+        all_roles
+        |> Enum.map(fn role ->
+          cap = Map.get(capabilities_map, role)
+          format_role_for_users(role, cap)
         end)
-      end)
+        |> Enum.join("\n\n")
 
-    (schema_terms ++ workflow_terms)
-    |> Enum.uniq_by(& &1.term)
-    |> Enum.take(20)
+      """
+      ## User Roles
+
+      Different users have different levels of access:
+
+      #{role_docs}
+      """
+      |> String.trim()
+    end
   end
 
-  defp gather_stats(analysis) do
-    roles_data = Map.get(analysis, :roles, %{roles: [], permissions: []})
-    all_roles = roles_data.roles |> Enum.flat_map(& &1.values) |> Enum.uniq()
-
-    %{
-      pages: length(analysis.live_view.live_views),
-      routes: length(analysis.routes.routes),
-      data_types: length(analysis.schemas),
-      workflows: length(Enum.filter(analysis.workflows, fn w -> length(w.status_values) >= 2 end)),
-      components: length(analysis.live_view.live_components) + length(analysis.live_view.function_components),
-      roles: length(all_roles),
-      permissions: length(roles_data.permissions)
-    }
+  defp format_role_for_users(role, nil) do
+    "- **#{String.capitalize(role)}** — Has access to the system."
   end
 
-  defp stats_list(stats) do
-    [
-      if(stats.pages > 0, do: "- **#{stats.pages}** interactive pages"),
-      if(stats.routes > 0, do: "- **#{stats.routes}** available endpoints"),
-      if(stats.data_types > 0, do: "- **#{stats.data_types}** types of data"),
-      if(stats.workflows > 0, do: "- **#{stats.workflows}** workflows with tracked states"),
-      if(stats.roles > 0, do: "- **#{stats.roles}** user roles"),
-      if(stats.components > 0, do: "- **#{stats.components}** reusable UI components")
-    ]
-    |> Enum.reject(&is_nil/1)
-    |> Enum.join("\n")
+  defp format_role_for_users(role, %{can: can, cannot: cannot}) do
+    base = "- **#{String.capitalize(role)}**"
+
+    cond do
+      can != [] && cannot != [] ->
+        can_text = can |> Enum.map(&String.capitalize/1) |> Enum.join(", ")
+        cannot_text = cannot |> Enum.map(&String.capitalize/1) |> Enum.join(", ")
+        "#{base} — Can: #{can_text}. Cannot: #{cannot_text}."
+
+      can != [] ->
+        can_text = can |> Enum.map(&String.capitalize/1) |> Enum.join(", ")
+        "#{base} — Can: #{can_text}."
+
+      cannot != [] ->
+        cannot_text = cannot |> Enum.map(&String.capitalize/1) |> Enum.join(", ")
+        "#{base} — Cannot: #{cannot_text}."
+
+      true ->
+        "#{base} — Has access to the system."
+    end
   end
 
   # ---------------------------------------------------------------------------
-  # Humanization Helpers
+  # Key Concepts
+  # ---------------------------------------------------------------------------
+
+  defp key_concepts_section(analysis, docs_lookup) do
+    # Extract meaningful concepts from schemas (not all, just the main ones)
+    concepts =
+      analysis.schemas
+      |> Enum.map(fn schema ->
+        name = schema.module |> short_name() |> humanize_module()
+        description = find_concept_description(schema.module, docs_lookup)
+        %{name: name, description: description}
+      end)
+      |> Enum.filter(fn c -> c.description != nil end)
+      |> Enum.take(15)
+
+    if concepts == [] do
+      nil
+    else
+      concept_list =
+        concepts
+        |> Enum.map(fn c -> "- **#{c.name}** — #{c.description}" end)
+        |> Enum.join("\n")
+
+      """
+      ## Key Concepts
+
+      #{concept_list}
+      """
+      |> String.trim()
+    end
+  end
+
+  defp find_concept_description(module_name, docs_lookup) do
+    # Look for @moduledoc that describes this concept
+    summary = find_module_summary(module_name, docs_lookup)
+
+    cond do
+      summary != nil && !generic_doc?(summary) ->
+        # Clean up the summary for end users
+        summary
+        |> String.replace(~r/^The \w+ context[.\s]*/, "")
+        |> String.replace(~r/Ecto schema for /, "")
+        |> String.trim()
+        |> case do
+          "" -> nil
+          cleaned -> cleaned
+        end
+
+      true ->
+        # Try to infer from the name
+        infer_concept_from_name(module_name)
+    end
+  end
+
+  defp infer_concept_from_name(module_name) do
+    name = module_name |> short_name() |> String.downcase()
+
+    cond do
+      String.contains?(name, "user") -> "A person who uses the system"
+      String.contains?(name, "incident") -> "Something that needs attention or response"
+      String.contains?(name, "alert") -> "A notification about something important"
+      String.contains?(name, "schedule") -> "Defines when things happen or who is responsible when"
+      String.contains?(name, "team") -> "A group of people working together"
+      String.contains?(name, "member") -> "A person belonging to a team or organization"
+      String.contains?(name, "notification") -> "A message sent to users"
+      String.contains?(name, "invitation") -> "An invite to join the system"
+      String.contains?(name, "organization") || String.contains?(name, "organisation") ->
+        "A company or group that uses the system"
+      String.contains?(name, "policy") -> "Rules that define how something works"
+      String.contains?(name, "runbook") -> "Step-by-step guide for handling situations"
+      String.contains?(name, "escalation") -> "Process of notifying more people if no response"
+      true -> nil
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Helpers
   # ---------------------------------------------------------------------------
 
   defp format_project_name(name) do
     name
     |> to_string()
     |> String.replace("_", " ")
-    |> String.split(" ")
+    |> String.split()
     |> Enum.map(&String.capitalize/1)
     |> Enum.join(" ")
-  end
-
-  defp project_name(analysis) do
-    format_project_name(analysis.config.project_name)
   end
 
   defp short_name(module) when is_binary(module) do
@@ -660,33 +505,6 @@ defmodule ElixirCartographer.Synthesis.UserDocsGenerator do
 
   defp short_name(module) when is_atom(module) do
     module |> to_string() |> short_name()
-  end
-
-  # Infer context module from controller name
-  # e.g., "IncidentController" -> "Incidents"
-  # e.g., "MyAppWeb.IncidentController" -> "MyApp.Incidents"
-  defp infer_context_module(controller) do
-    # Strip Controller suffix and Web prefix
-    base = 
-      controller
-      |> String.replace("Controller", "")
-      |> String.replace("Web.", ".")
-      |> String.replace(~r/^\./, "")  # Remove leading dot if present
-    
-    # If it's just a name like "Incident", pluralize it
-    if String.contains?(base, ".") do
-      # Has a namespace - extract and pluralize last part
-      case Regex.run(~r/\.(\w+)$/, base) do
-        [_, name] ->
-          prefix = String.replace(base, ~r/\.#{name}$/, "")
-          "#{prefix}.#{name}s"
-        _ ->
-          base <> "s"
-      end
-    else
-      # Simple name - just pluralize
-      base <> "s"
-    end
   end
 
   defp humanize_module(name) do
@@ -698,24 +516,12 @@ defmodule ElixirCartographer.Synthesis.UserDocsGenerator do
     |> String.trim()
   end
 
-  defp humanize_action(action) do
-    case to_string(action) do
-      "index" -> "View list"
-      "show" -> "View details"
-      "new" -> "Create new"
-      "create" -> "Save new"
-      "edit" -> "Edit existing"
-      "update" -> "Save changes"
-      "delete" -> "Remove"
-      other -> String.capitalize(String.replace(other, "_", " "))
-    end
-  end
-
-  defp humanize_event(event) do
-    event
-    |> String.replace("_", " ")
-    |> String.replace("-", " ")
-    |> String.capitalize()
+  defp humanize_controller(name) do
+    name
+    |> to_string()
+    |> String.replace("Controller", "")
+    |> String.replace(~r/([a-z])([A-Z])/, "\\1 \\2")
+    |> String.trim()
   end
 
   defp humanize_state(state) do
@@ -725,128 +531,75 @@ defmodule ElixirCartographer.Synthesis.UserDocsGenerator do
     |> String.capitalize()
   end
 
-  defp humanize_field(name) do
-    name
-    |> to_string()
-    |> String.replace("_", " ")
-    |> String.capitalize()
-  end
-
-  defp humanize_type(type) do
-    case type do
-      :string -> "text"
-      :text -> "text"
-      :integer -> "number"
-      :float -> "decimal"
-      :decimal -> "decimal"
-      :boolean -> "yes/no"
-      :date -> "date"
-      :time -> "time"
-      :datetime -> "date and time"
-      :utc_datetime -> "date and time"
-      :utc_datetime_usec -> "date and time"
-      :naive_datetime -> "date and time"
-      :naive_datetime_usec -> "date and time"
-      :binary -> "file data"
-      :map -> "structured data"
-      {:array, inner} -> "list of #{humanize_type(inner)}"
-      {:parameterized, Ecto.Enum, _} -> "choice"
-      other -> to_string(other)
+  defp pluralize(word) do
+    cond do
+      String.ends_with?(word, "y") && !String.ends_with?(word, "ey") ->
+        String.slice(word, 0..-2//1) <> "ies"
+      String.ends_with?(word, "s") || String.ends_with?(word, "x") ||
+      String.ends_with?(word, "ch") || String.ends_with?(word, "sh") ->
+        word <> "es"
+      true ->
+        word <> "s"
     end
   end
 
-  defp humanize_area("/"), do: "Main"
-  defp humanize_area(area) do
-    area
-    |> String.trim_leading("/")
-    |> String.split("/")
-    |> List.first()
-    |> String.replace("_", " ")
-    |> String.capitalize()
+  defp generic_doc?(doc) do
+    Regex.match?(~r/^The \w+ context\.?$/i, doc) ||
+    Regex.match?(~r/^Ecto schema for/i, doc) ||
+    String.length(doc) < 20
   end
 
-  defp humanize_transition(function) do
-    function
-    |> String.replace(~r/^def\s+/, "")
-    |> String.replace(~r/\(.*$/, "")
-    |> String.replace("_", " ")
-    |> String.capitalize()
-  end
+  defp find_module_summary(module_name, docs_lookup) do
+    search_name = short_name(module_name)
 
-  defp relation_phrase(:has_many), do: "Has multiple"
-  defp relation_phrase(:has_one), do: "Has one"
-  defp relation_phrase(:belongs_to), do: "Belongs to a"
-  defp relation_phrase(:many_to_many), do: "Connected to multiple"
-  defp relation_phrase(_), do: "Related to"
+    matching_key =
+      docs_lookup
+      |> Map.keys()
+      |> Enum.find(fn key ->
+        short_name(key) == search_name ||
+        String.ends_with?(key, ".#{search_name}")
+      end)
 
-  defp explain_state(state) do
-    state_str = to_string(state) |> String.downcase()
-
-    cond do
-      state_str in ~w(pending waiting queued) -> "Waiting to be processed"
-      state_str in ~w(active enabled running processing in_progress) -> "Currently being worked on"
-      state_str in ~w(completed done finished resolved closed) -> "Successfully finished"
-      state_str in ~w(cancelled canceled cancelled_by_user) -> "Stopped by user request"
-      state_str in ~w(failed error errored) -> "Something went wrong"
-      state_str in ~w(draft) -> "Not yet submitted"
-      state_str in ~w(submitted) -> "Sent for review"
-      state_str in ~w(approved) -> "Accepted and confirmed"
-      state_str in ~w(rejected denied) -> "Not accepted"
-      state_str in ~w(archived) -> "Stored for historical reference"
-      state_str in ~w(suspended paused on_hold) -> "Temporarily stopped"
-      state_str in ~w(scheduled) -> "Planned for future processing"
-      state_str in ~w(triggered fired) -> "Event has occurred"
-      state_str in ~w(acknowledged acked) -> "Someone has seen it"
-      true -> "Item is in the #{humanize_state(state)} state"
+    case matching_key && Map.get(docs_lookup, matching_key) do
+      %{module_doc: %{summary: summary}} when is_binary(summary) -> summary
+      _ -> nil
     end
   end
 
-  defp describe_feature(name, actions) do
-    name_lower = String.downcase(name)
-    has_crud = Enum.any?(actions, &(&1 in ~w(index show new create edit update delete)a))
+  defp find_function_doc(controller, action, docs_lookup) do
+    # Try to find the controller and its function doc
+    search_name = String.replace(controller, "Controller", "")
 
-    cond do
-      has_crud -> "Manage #{name_lower} records — view, create, edit, and delete."
-      String.contains?(name_lower, "dashboard") -> "Overview page showing key metrics and status."
-      String.contains?(name_lower, "report") -> "Generate and view reports."
-      String.contains?(name_lower, "setting") -> "Configure application preferences."
-      String.contains?(name_lower, "auth") -> "Handle user authentication and access."
-      String.contains?(name_lower, "session") -> "Manage user sessions."
-      true -> "#{name} functionality."
+    matching_key =
+      docs_lookup
+      |> Map.keys()
+      |> Enum.find(fn key -> String.contains?(key, search_name) end)
+
+    case matching_key && Map.get(docs_lookup, matching_key) do
+      %{functions: functions} ->
+        case Enum.find(functions, fn f -> f.function == action end) do
+          %{summary: summary} -> clean_doc_for_users(summary)
+          _ -> nil
+        end
+      _ -> nil
     end
   end
 
-  defp describe_concept(name) do
-    name_lower = String.downcase(name)
+  # Clean up docs to remove code snippets and technical details
+  defp clean_doc_for_users(nil), do: nil
+  defp clean_doc_for_users(doc) do
+    cleaned =
+      doc
+      |> String.split(~r/\n\n|"""|\bdef\b|\bdefp\b/, parts: 2)
+      |> List.first()
+      |> String.replace(~r/`[^`]+`/, "")  # Remove inline code
+      |> String.replace(~r/\s+/, " ")
+      |> String.trim()
 
-    cond do
-      String.contains?(name_lower, "user") -> "Represents a person who uses the system."
-      String.contains?(name_lower, "account") -> "Stores account information."
-      String.contains?(name_lower, "organization") or String.contains?(name_lower, "organisation") ->
-        "A company or team that uses the system."
-      String.contains?(name_lower, "team") -> "A group of users working together."
-      String.contains?(name_lower, "incident") -> "An event or issue that needs attention."
-      String.contains?(name_lower, "alert") -> "A notification about something important."
-      String.contains?(name_lower, "schedule") -> "Defines when things happen."
-      String.contains?(name_lower, "shift") -> "A time period when someone is on duty."
-      String.contains?(name_lower, "notification") -> "A message sent to users."
-      String.contains?(name_lower, "message") -> "Communication between users or the system."
-      String.contains?(name_lower, "event") -> "Something that happened in the system."
-      String.contains?(name_lower, "log") -> "A record of activity."
-      String.contains?(name_lower, "setting") -> "Configuration options."
-      String.contains?(name_lower, "token") -> "A secure key for authentication."
-      String.contains?(name_lower, "session") -> "An active user connection."
-      String.contains?(name_lower, "invite") or String.contains?(name_lower, "invitation") ->
-        "An invitation to join the system."
-      String.contains?(name_lower, "role") -> "Defines what a user can do."
-      String.contains?(name_lower, "permission") -> "Access rights to features."
-      String.contains?(name_lower, "task") -> "Work that needs to be done."
-      String.contains?(name_lower, "project") -> "A collection of related work."
-      String.contains?(name_lower, "comment") -> "Notes or feedback on something."
-      String.contains?(name_lower, "attachment") -> "A file linked to a record."
-      String.contains?(name_lower, "tag") -> "A label for organizing items."
-      String.contains?(name_lower, "category") -> "A way to group related items."
-      true -> "Stores #{name_lower} information."
+    if String.length(cleaned) > 10 && !String.contains?(cleaned, "defp") do
+      cleaned
+    else
+      nil
     end
   end
 end

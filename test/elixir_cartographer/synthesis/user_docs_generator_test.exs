@@ -4,22 +4,22 @@ defmodule ElixirCartographer.Synthesis.UserDocsGeneratorTest do
   alias ElixirCartographer.Synthesis.UserDocsGenerator
 
   describe "generate/1" do
-    test "generates a markdown document with title section" do
+    test "generates a user-friendly markdown document" do
       analysis = build_analysis()
       result = UserDocsGenerator.generate(analysis)
 
       assert result =~ "# Test Project — User Guide"
-      assert result =~ "Last generated:"
+      assert result =~ "This guide explains what you can do"
     end
 
-    test "includes overview section with stats" do
+    test "includes what is section" do
       analysis = build_analysis()
       result = UserDocsGenerator.generate(analysis)
 
-      assert result =~ "## Overview"
+      assert result =~ "## What is Test Project?"
     end
 
-    test "generates workflows section with mermaid diagrams" do
+    test "generates how it works section with workflows" do
       analysis =
         build_analysis(
           workflows: [
@@ -27,9 +27,7 @@ defmodule ElixirCartographer.Synthesis.UserDocsGeneratorTest do
               module: "MyApp.Incidents.Incident",
               status_fields: [%{name: :status, type: :string}],
               status_values: ["triggered", "acknowledged", "resolved"],
-              transitions: [
-                %{function: "def acknowledge(incident)", path: "lib/incidents.ex", context: "MyApp.Incidents", values: ["triggered", "acknowledged"]}
-              ],
+              transitions: [],
               branches: 2,
               table: "incidents"
             }
@@ -38,45 +36,16 @@ defmodule ElixirCartographer.Synthesis.UserDocsGeneratorTest do
 
       result = UserDocsGenerator.generate(analysis)
 
-      assert result =~ "## Workflows & States"
-      assert result =~ "### Incident Workflow"
+      assert result =~ "## How Things Work"
+      assert result =~ "### Incident"
       assert result =~ "Triggered"
       assert result =~ "Acknowledged"
       assert result =~ "Resolved"
       assert result =~ "```mermaid"
-      assert result =~ "stateDiagram-v2"
+      assert result =~ "flowchart LR"
     end
 
-    test "generates data concepts from schemas" do
-      analysis =
-        build_analysis(
-          schemas: [
-            %{
-              module: "MyApp.Accounts.User",
-              table: "users",
-              fields: [
-                %{name: :id, type: :integer},
-                %{name: :email, type: :string},
-                %{name: :name, type: :string},
-                %{name: :inserted_at, type: :utc_datetime}
-              ],
-              associations: [
-                %{type: :has_many, target: :incidents}
-              ]
-            }
-          ]
-        )
-
-      result = UserDocsGenerator.generate(analysis)
-
-      assert result =~ "## Data Concepts"
-      assert result =~ "### User"
-      assert result =~ "**Email** (text)"
-      assert result =~ "**Name** (text)"
-      assert result =~ "Has multiple"
-    end
-
-    test "generates features from routes" do
+    test "generates what you can do section from routes" do
       analysis =
         build_analysis(
           routes: %{
@@ -93,14 +62,14 @@ defmodule ElixirCartographer.Synthesis.UserDocsGeneratorTest do
 
       result = UserDocsGenerator.generate(analysis)
 
-      assert result =~ "## Features"
+      assert result =~ "## What You Can Do"
       assert result =~ "### User"
-      assert result =~ "View list"
-      assert result =~ "View details"
-      assert result =~ "Save new"
+      assert result =~ "View all users"
+      assert result =~ "View user details"
+      assert result =~ "Save a new user"
     end
 
-    test "generates pages from LiveViews" do
+    test "generates what you can do section from LiveView events" do
       analysis =
         build_analysis(
           live_view: %{
@@ -120,38 +89,12 @@ defmodule ElixirCartographer.Synthesis.UserDocsGeneratorTest do
 
       result = UserDocsGenerator.generate(analysis)
 
-      assert result =~ "## Pages & Screens"
-      assert result =~ "### Dashboard"
-      assert result =~ "An interactive page"
+      assert result =~ "## What You Can Do"
       assert result =~ "Filter changed"
       assert result =~ "Refresh"
     end
 
-    test "generates navigation map from routes" do
-      analysis =
-        build_analysis(
-          routes: %{
-            routes: [
-              %{method: "GET", path: "/admin/users", controller: "Admin.UserController", action: "index"},
-              %{method: "GET", path: "/api/v1/data", controller: "Api.DataController", action: "index"}
-            ],
-            pipelines: [],
-            scopes: [
-              %{path: "/admin", module: nil, as: nil},
-              %{path: "/api/v1", module: nil, as: nil}
-            ],
-            plugs: []
-          }
-        )
-
-      result = UserDocsGenerator.generate(analysis)
-
-      assert result =~ "## Navigation Map"
-      assert result =~ "### Admin"
-      assert result =~ "/admin/users"
-    end
-
-    test "generates glossary section" do
+    test "generates key concepts section" do
       analysis =
         build_analysis(
           schemas: [
@@ -161,49 +104,40 @@ defmodule ElixirCartographer.Synthesis.UserDocsGeneratorTest do
               fields: [%{name: :id, type: :integer}],
               associations: []
             }
-          ],
-          workflows: [
-            %{
-              module: "MyApp.Incidents.Incident",
-              status_fields: [%{name: :status, type: :string}],
-              status_values: ["pending", "resolved"],
-              transitions: [],
-              branches: 0,
-              table: "incidents"
-            }
           ]
         )
 
       result = UserDocsGenerator.generate(analysis)
 
-      assert result =~ "## Glossary"
+      assert result =~ "## Key Concepts"
       assert result =~ "**Incident**"
-      assert result =~ "**Pending**"
-      assert result =~ "**Resolved**"
     end
 
-    test "skips sections when no data available" do
-      analysis = build_analysis(
-        workflows: [],
-        schemas: [],
-        routes: %{routes: [], pipelines: [], scopes: [], plugs: []},
-        live_view: %{live_views: [], live_components: [], function_components: []}
-      )
-
+    test "generates user roles section" do
+      analysis = build_analysis()
       result = UserDocsGenerator.generate(analysis)
 
-      # Should still have overview
-      assert result =~ "## Overview"
-      # Should not have empty sections
-      refute result =~ "## Workflows & States"
-      refute result =~ "## Data Concepts"
-      refute result =~ "## Features"
-      refute result =~ "## Pages & Screens"
-    end
-  end
+      # Should not have roles section if no roles defined
+      refute result =~ "## User Roles"
 
-  describe "state explanations" do
-    test "provides meaningful explanations for common states" do
+      # Add roles
+      analysis_with_roles = build_analysis(
+        roles: %{
+          roles: [%{values: ["admin", "member"], source: :test, context: "Test", path: "test.ex"}],
+          permissions: [],
+          policies: [],
+          auth_plugs: [],
+          role_capabilities: []
+        }
+      )
+
+      result_with_roles = UserDocsGenerator.generate(analysis_with_roles)
+      assert result_with_roles =~ "## User Roles"
+      assert result_with_roles =~ "**Admin**"
+      assert result_with_roles =~ "**Member**"
+    end
+
+    test "explains workflow states in user-friendly language" do
       analysis =
         build_analysis(
           workflows: [
@@ -221,10 +155,50 @@ defmodule ElixirCartographer.Synthesis.UserDocsGeneratorTest do
       result = UserDocsGenerator.generate(analysis)
 
       assert result =~ "Waiting to be processed"
-      assert result =~ "Currently being worked on"
-      assert result =~ "Successfully finished"
+      assert result =~ "Currently in progress"
+      assert result =~ "All done"
       assert result =~ "Something went wrong"
-      assert result =~ "Stopped by user request"
+      assert result =~ "Was stopped or rejected"
+    end
+
+    test "skips sections when no data available" do
+      analysis = build_analysis(
+        workflows: [],
+        schemas: [],
+        routes: %{routes: [], pipelines: [], scopes: [], plugs: []},
+        live_view: %{live_views: [], live_components: [], function_components: []}
+      )
+
+      result = UserDocsGenerator.generate(analysis)
+
+      # Should still have title and what is
+      assert result =~ "# Test Project — User Guide"
+      assert result =~ "## What is Test Project?"
+
+      # Should not have empty sections
+      refute result =~ "## How Things Work"
+      refute result =~ "## What You Can Do"
+      refute result =~ "## Key Concepts"
+    end
+
+    test "pluralizes correctly" do
+      analysis =
+        build_analysis(
+          routes: %{
+            routes: [
+              %{method: "GET", path: "/policies", controller: "PolicyController", action: "index"},
+              %{method: "GET", path: "/categories", controller: "CategoryController", action: "index"}
+            ],
+            pipelines: [],
+            scopes: [],
+            plugs: []
+          }
+        )
+
+      result = UserDocsGenerator.generate(analysis)
+
+      assert result =~ "View all policies"
+      assert result =~ "View all categories"
     end
   end
 
@@ -252,6 +226,9 @@ defmodule ElixirCartographer.Synthesis.UserDocsGeneratorTest do
       config_matrix: %{env_vars: [], app_configs: []},
       errors: [],
       workflows: [],
+      roles: %{roles: [], permissions: [], policies: [], auth_plugs: [], role_capabilities: []},
+      docs: [],
+      docs_lookup: %{},
       git: %{total_commits: 0, hotspots: []},
       tests: %{total_tests: 0, test_files: []}
     ]
